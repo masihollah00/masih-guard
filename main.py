@@ -233,4 +233,296 @@ def uptime_text():
         f"{minutes} دقیقه و {seconds} ثانیه"
     )
 
-# پایان بخش اول
+# ==============================
+# پنل مدیریتی فارسی MASIH GUARD
+# این بخش را به انتهای main.py اضافه کن
+# ==============================
+
+from telebot import types
+
+
+def build_main_panel():
+    panel = types.InlineKeyboardMarkup(row_width=2)
+
+    panel.add(
+        types.InlineKeyboardButton(
+            "🛡️ امنیت گروه",
+            callback_data="security"
+        ),
+        types.InlineKeyboardButton(
+            "👮 مدیریت اعضا",
+            callback_data="moderation"
+        )
+    )
+
+    panel.add(
+        types.InlineKeyboardButton(
+            "📜 قوانین گروه",
+            callback_data="rules"
+        ),
+        types.InlineKeyboardButton(
+            "👋 خوشامدگویی",
+            callback_data="welcome"
+        )
+    )
+
+    panel.add(
+        types.InlineKeyboardButton(
+            "📊 وضعیت ربات",
+            callback_data="status"
+        ),
+        types.InlineKeyboardButton(
+            "📋 راهنمای دستورات",
+            callback_data="help"
+        )
+    )
+
+    return panel
+
+
+def build_security_panel(chat_id):
+    settings = get_group(chat_id)
+    panel = types.InlineKeyboardMarkup(row_width=1)
+
+    link_status = "روشن ✅" if settings["anti_link"] else "خاموش ❌"
+    spam_status = "روشن ✅" if settings["anti_spam"] else "خاموش ❌"
+
+    panel.add(
+        types.InlineKeyboardButton(
+            f"🔗 ضدلینک: {link_status}",
+            callback_data="toggle_link"
+        ),
+        types.InlineKeyboardButton(
+            f"🚫 ضداسپم: {spam_status}",
+            callback_data="toggle_spam"
+        ),
+        types.InlineKeyboardButton(
+            "🔙 بازگشت به پنل",
+            callback_data="home"
+        )
+    )
+
+    return panel
+
+
+@bot.message_handler(commands=["panel", "پنل"])
+def show_main_panel(message):
+    bot.send_message(
+        message.chat.id,
+        "🌈 <b>MASIH GUARD | پنل هفت‌رنگ</b>\n\n"
+        "یکی از بخش‌های زیر را انتخاب کن:",
+        reply_markup=build_main_panel()
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in [
+        "home", "security", "moderation", "rules",
+        "welcome", "status", "help",
+        "toggle_link", "toggle_spam", "toggle_welcome"
+    ]
+)
+def handle_panel_buttons(call):
+    chat_id = call.message.chat.id
+    data = call.data
+
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    if data == "home":
+        bot.edit_message_text(
+            "🌈 <b>MASIH GUARD</b>\n\n"
+            "بخش موردنظر را انتخاب کن:",
+            chat_id,
+            call.message.message_id,
+            reply_markup=build_main_panel()
+        )
+        return
+
+    if data in ("toggle_link", "toggle_spam", "toggle_welcome"):
+        if not is_group(call.message):
+            bot.send_message(
+                chat_id,
+                "⚠️ این تنظیم فقط داخل گروه قابل تغییر است."
+            )
+            return
+
+        if not is_admin(chat_id, call.from_user.id):
+            bot.send_message(
+                chat_id,
+                "⛔ فقط مدیران گروه اجازه تغییر تنظیمات را دارند."
+            )
+            return
+
+        settings = get_group(chat_id)
+
+        key = {
+            "toggle_link": "anti_link",
+            "toggle_spam": "anti_spam",
+            "toggle_welcome": "welcome"
+        }[data]
+
+        settings[key] = not settings[key]
+        save_data()
+
+        add_log(
+            chat_id,
+            f"تنظیم {key} توسط {call.from_user.id} تغییر کرد."
+        )
+
+        if data == "toggle_welcome":
+            bot.edit_message_text(
+                "👋 <b>تنظیم خوشامدگویی</b>\n\n"
+                f"وضعیت: {'روشن ✅' if settings['welcome'] else 'خاموش ❌'}",
+                chat_id,
+                call.message.message_id,
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton(
+                        "🔄 تغییر وضعیت",
+                        callback_data="toggle_welcome"
+                    ),
+                    types.InlineKeyboardButton(
+                        "🔙 بازگشت",
+                        callback_data="home"
+                    )
+                )
+            )
+        else:
+            bot.edit_message_text(
+                "🛡️ <b>تنظیمات امنیت گروه</b>\n\n"
+                "تنظیم موردنظر را انتخاب کن:",
+                chat_id,
+                call.message.message_id,
+                reply_markup=build_security_panel(chat_id)
+            )
+        return
+
+    if data == "security":
+        if not is_group(call.message):
+            bot.send_message(
+                chat_id,
+                "برای تنظیم امنیت، این بخش را از داخل گروه باز کن."
+            )
+            return
+
+        bot.edit_message_text(
+            "🛡️ <b>امنیت گروه</b>\n\n"
+            "وضعیت قابلیت‌ها را از دکمه‌های زیر تغییر بده.",
+            chat_id,
+            call.message.message_id,
+            reply_markup=build_security_panel(chat_id)
+        )
+        return
+
+    if data == "moderation":
+        bot.send_message(
+            chat_id,
+            "👮 <b>دستورات مدیریت اعضا</b>\n\n"
+            "برای استفاده از این دستورات، در گروه روی پیام کاربر پاسخ بده:\n\n"
+            "• <code>/warn</code> — ثبت اخطار\n"
+            "• <code>/mute 10</code> — محدودیت ۱۰ دقیقه‌ای\n"
+            "• <code>/unmute</code> — برداشتن محدودیت\n"
+            "• <code>/ban</code> — مسدودکردن کاربر\n"
+            "• <code>/kick</code> — اخراج کاربر\n"
+            "• <code>/purge 10</code> — حذف پیام‌ها\n\n"
+            "این دستورات به مجوزهای لازم ربات در گروه نیاز دارند."
+        )
+        return
+
+    if data == "rules":
+        if not is_group(call.message):
+            bot.send_message(
+                chat_id,
+                "📜 قوانین را از داخل گروه مشاهده کن."
+            )
+            return
+
+        settings = get_group(chat_id)
+
+        bot.send_message(
+            chat_id,
+            "📜 <b>قوانین گروه</b>\n\n" +
+            safe_html(settings["rules"])
+        )
+        return
+
+    if data == "welcome":
+        if not is_group(call.message):
+            bot.send_message(
+                chat_id,
+                "👋 این تنظیم را از داخل گروه باز کن."
+            )
+            return
+
+        settings = get_group(chat_id)
+
+        status = "روشن ✅" if settings["welcome"] else "خاموش ❌"
+
+        panel = types.InlineKeyboardMarkup(row_width=1)
+        panel.add(
+            types.InlineKeyboardButton(
+                "🔄 تغییر وضعیت خوشامدگویی",
+                callback_data="toggle_welcome"
+            ),
+            types.InlineKeyboardButton(
+                "🔙 بازگشت",
+                callback_data="home"
+            )
+        )
+
+        bot.send_message(
+            chat_id,
+            f"👋 <b>خوشامدگویی</b>\n\nوضعیت فعلی: {status}",
+            reply_markup=panel
+        )
+        return
+
+    if data == "status":
+        bot.send_message(
+            chat_id,
+            "📊 <b>وضعیت MASIH GUARD</b>\n\n"
+            "🟢 ربات در حال اجراست.\n"
+            f"⏱️ زمان فعالیت: {uptime_text()}\n"
+            f"🧩 نسخه: {BOT_VERSION}"
+        )
+        return
+
+    if data == "help":
+        bot.send_message(
+            chat_id,
+            "📋 <b>راهنمای MASIH GUARD</b>\n\n"
+            "• <code>/start</code> — شروع ربات\n"
+            "• <code>/panel</code> — نمایش پنل\n"
+            "• <code>/rules</code> — قوانین گروه\n"
+            "• <code>/id</code> — شناسه کاربر یا گروه\n"
+            "• <code>/warn</code> — اخطار به کاربر با پاسخ به پیام\n\n"
+            "برای دستورات مدیریتی، ربات باید مجوز مناسب داشته باشد."
+        )
+        return
+
+
+@bot.message_handler(commands=["rules"])
+def show_rules(message):
+    if not is_group(message):
+        bot.reply_to(message, "این دستور را داخل گروه استفاده کن.")
+        return
+
+    settings = get_group(message.chat.id)
+
+    bot.reply_to(
+        message,
+        "📜 <b>قوانین گروه</b>\n\n" +
+        safe_html(settings["rules"])
+    )
+
+
+@bot.message_handler(commands=["id"])
+def show_id(message):
+    bot.reply_to(
+        message,
+        f"🆔 شناسه گروه: <code>{message.chat.id}</code>\n"
+        f"👤 شناسه شما: <code>{message.from_user.id}</code>"
+    )
+
