@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MASIH_GUARD")
 
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 if not TOKEN:
     raise RuntimeError(
