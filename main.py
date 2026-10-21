@@ -1,714 +1,753 @@
 # -*- coding: utf-8 -*-
 """
-MASIH GUARD PRO — single-file Telegram group moderation bot
-Required environment variables:
-  BOT_TOKEN (or TELEGRAM_BOT_TOKEN)
-Optional AI:
-  AI_API_KEY, AI_BASE_URL, AI_MODEL
-Optional:
-  OWNER_ID (defaults to 8620924698), DATA_FILE
+MASIH GUARD PRO
+Python 3.11+
+Dependencies: pyTelegramBotAPI, Flask, requests
+
+Environment variables:
+BOT_TOKEN            Required
+OWNER_ID             Optional
+AI_API_KEY           Optional
+AI_BASE_URL          Optional (default OpenRouter API)
+AI_MODEL             Optional
+PORT                 Set by hosting provider
 """
+
 import os
 import re
 import json
 import time
-import math
-import random
 import logging
 import threading
-import urllib.request
-import urllib.error
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 
+import requests
 import telebot
 from telebot import types
 from flask import Flask, jsonify
 
-# -------------------- Configuration --------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN", "")
-OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
+# ---------------- CONFIG ----------------
+
 BOT_NAME = "MASIH GUARD PRO"
-VERSION = "3.0"
-DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
+VERSION = "4.0"
+
+BOT_TOKEN = (
+    os.getenv("BOT_TOKEN")
+    or os.getenv("TELEGRAM_BOT_TOKEN")
+    or ""
+).strip()
+
+OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
+
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/")
+AI_BASE_URL = os.getenv(
+    "AI_BASE_URL", "https://openrouter.ai/api/v1"
+).strip().rstrip("/")
 AI_MODEL = os.getenv("AI_MODEL", "").strip()
-AI_TIMEOUT = 25
+
+PORT = int(os.getenv("PORT", "8080"))
+DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN یا TELEGRAM_BOT_TOKEN در Environment تنظیم نشده است.")
+    raise RuntimeError(
+        "BOT_TOKEN is missing. Add BOT_TOKEN in hosting Environment."
+    )
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-log = logging.getLogger("masih_guard")
+log = logging.getLogger(BOT_NAME)
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=8)
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 app = Flask(__name__)
-START_TIME = time.time()
 
-# -------------------- Persistent data --------------------
-DATA_LOCK = threading.RLock()
-DEFAULT_DATA = {
-    "groups": {},
-    "licenses": {},
-    "bot_enabled": True,
-}
-data = {}
+# ---------------- STORAGE ----------------
+
+lock = threading.RLock()
+
+def default_data():
+    return {
+        "chats": {},
+        "badwords": {},
+        "warnings": {},
+        "settings": {},
+        "welcome": {},
+        "logs": []
+    }
 
 def load_data():
-    global data
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        if not isinstance(loaded, dict):
-            loaded = {}
-        data = {**DEFAULT_DATA, **loaded}
-        if not isinstance(data.get("groups"), dict):
-            data["groups"] = {}
-        if not isinstance(data.get("licenses"), dict):
-            data["licenses"] = {}
-    except FileNotFoundError:
-        data = json.loads(json.dumps(DEFAULT_DATA))
+        if os.path.isfile(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                result = json.load(f)
+                if isinstance(result, dict):
+                    base = default_data()
+                    base.update(result)
+                    return base
     except Exception:
-        log.exception("Could not read data file; starting with defaults")
-        data = json.loads(json.dumps(DEFAULT_DATA))
+        log.exception("Could not load data file")
+    return default_data()
+
+data = load_data()
 
 def save_data():
-    with DATA_LOCK:
-        tmp = DATA_FILE + ".tmp"
+    with lock:
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            temp = DATA_FILE + ".tmp"
+            with open(temp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, DATA_FILE)
+            os.replace(temp, DATA_FILE)
         except Exception:
             log.exception("Could not save data")
 
-def group_settings(chat_id):
+def chat_settings(chat_id):
     key = str(chat_id)
-    with DATA_LOCK:
-        groups = data.setdefault("groups", {})
-        if key not in groups:
-            groups[key] = {
-                "antilink": True,
-                "antispam": True,
-                "antiforward": False,
-                "welcome": True,
-                "rules": "قوانین گروه هنوز تنظیم نشده است.",
-                "badwords": [],
-                "log_chat_id": None,
-                "warnings": {},
-                "muted_until": {},
-            }
-            save_data()
-        settings = groups[key]
-        defaults = {
-            "antilink": True, "antispam": True, "antiforward": False,
-            "welcome": True, "rules": "قوانین گروه هنوز تنظیم نشده است.",
-            "badwords": [], "log_chat_id": None, "warnings": {}, "muted_until": {}
-        }
-        for k, v in defaults.items():
-            settings.setdefault(k, v)
-        return settings
+    with lock:
+        return data["settings"].setdefault(key, {
+            "anti_link": True,
+            "anti_spam": True,
+            "badword_filter": True,
+            "welcome_enabled": True,
+            "max_messages": 6,
+            "spam_window": 8,
+            "max_warnings": 3
+        })
 
-load_data()
+def log_action(chat_id, text):
+    with lock:
+        data["logs"].append({
+            "chat": str(chat_id),
+            "time": datetime.now(timezone.utc).isoformat(),
+            "text": str(text)[:500]
+        })
+        data["logs"] = data["logs"][-300:]
+    save_data()
 
-# -------------------- Helpers --------------------
-def is_group(message):
-    return bool(message.chat and message.chat.type in ("group", "supergroup"))
+# ---------------- FLASK HEALTH SERVER ----------------
 
-def is_admin(message):
-    if not is_group(message):
-        return False
+@app.get("/")
+def home():
+    return jsonify({
+        "name": BOT_NAME,
+        "version": VERSION,
+        "status": "running"
+    })
+
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok", "bot": BOT_NAME})
+
+# ---------------- HELPERS ----------------
+
+spam_history = defaultdict(deque)
+
+def is_owner(user_id):
+    return user_id == OWNER_ID
+
+def is_admin(chat_id, user_id):
+    if is_owner(user_id):
+        return True
     try:
-        member = bot.get_chat_member(message.chat.id, message.from_user.id)
+        member = bot.get_chat_member(chat_id, user_id)
         return member.status in ("administrator", "creator")
     except Exception:
         return False
 
-def is_owner(user_id):
-    return int(user_id or 0) == OWNER_ID
-
-def is_admin_or_owner(message):
-    return is_owner(message.from_user.id) or is_admin(message)
-
-def mention(user):
-    name = (user.first_name or "کاربر").replace("<", "").replace(">", "")
-    return f'<a href="tg://user?id={user.id}">{name}</a>'
-
-def send_log(chat_id, text):
-    try:
-        s = group_settings(chat_id)
-        log_chat_id = s.get("log_chat_id")
-        if log_chat_id:
-            bot.send_message(int(log_chat_id), text)
-    except Exception:
-        log.exception("Log message failed")
-
-def safe_reply(message, text, **kwargs):
+def reply_safe(message, text, **kwargs):
     try:
         return bot.reply_to(message, text, **kwargs)
     except Exception:
-        log.exception("Could not send reply")
+        log.exception("Could not reply")
         return None
 
-def extract_target_and_reason(message):
-    parts = (message.text or "").split(maxsplit=1)
-    reason = parts[1] if len(parts) > 1 else "بدون توضیح"
-    if message.reply_to_message:
-        return message.reply_to_message.from_user.id, reason
-    if len(parts) > 1 and parts[1].split()[0].isdigit():
-        target = int(parts[1].split()[0])
-        rest = parts[1].split(maxsplit=1)
-        return target, (rest[1] if len(rest) > 1 else "بدون توضیح")
-    return None, reason
-
-def require_admin(message):
-    if not is_group(message):
-        safe_reply(message, "این دستور را داخل گروه استفاده کن.")
+def is_link(text):
+    if not text:
         return False
-    if not is_admin_or_owner(message):
-        safe_reply(message, "⛔ فقط مدیران گروه می‌توانند از این دستور استفاده کنند.")
+    pattern = (
+        r"(https?://|www\.|t\.me/|telegram\.me/|"
+        r"telegram\.dog/|@\w{5,})"
+    )
+    return bool(re.search(pattern, text, re.IGNORECASE))
+
+def get_badwords(chat_id):
+    with lock:
+        words = data["badwords"].get(str(chat_id), [])
+        return list(words) if isinstance(words, list) else []
+
+def add_warning(chat_id, user_id):
+    key = f"{chat_id}:{user_id}"
+    with lock:
+        data["warnings"][key] = data["warnings"].get(key, 0) + 1
+        count = data["warnings"][key]
+    save_data()
+    return count
+
+def warning_count(chat_id, user_id):
+    return data["warnings"].get(f"{chat_id}:{user_id}", 0)
+
+def extract_target(message):
+    if message.reply_to_message:
+        return message.reply_to_message.from_user
+    parts = (message.text or "").split()
+    if len(parts) > 1 and parts[1].isdigit():
+        try:
+            return bot.get_chat_member(
+                message.chat.id, int(parts[1])
+            ).user
+        except Exception:
+            return None
+    return None
+
+def target_user_id(message):
+    target = extract_target(message)
+    return target.id if target else None
+
+def ensure_manageable(message, target_id):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ این دستور مخصوص مدیران گروه است.")
+        return False
+    if not target_id:
+        reply_safe(
+            message,
+            "⚠️ روی پیام کاربر ریپلای کن یا آیدی عددی او را بنویس."
+        )
+        return False
+    if target_id == message.from_user.id:
+        reply_safe(message, "⚠️ این کار را روی خودت انجام نده.")
+        return False
+    if target_id == OWNER_ID:
+        reply_safe(message, "⛔ این کاربر مالک ربات است.")
         return False
     return True
 
-LINK_RE = re.compile(r"(?i)(https?://|www\.|t\.me/|telegram\.me/|discord\.gg/)")
-def contains_link(text):
-    return bool(LINK_RE.search(text or ""))
-
-def normalized(text):
-    return (text or "").casefold().replace("ي", "ی").replace("ك", "ک").strip()
-
-def contains_badword(text, words):
-    body = normalized(text)
-    return any(normalized(w) and normalized(w) in body for w in words)
-
-def warn_user(chat_id, user_id, reason="تخلف"):
-    s = group_settings(chat_id)
-    warnings = s.setdefault("warnings", {})
-    key = str(user_id)
-    warnings[key] = int(warnings.get(key, 0)) + 1
-    count = warnings[key]
-    save_data()
-    try:
-        if count >= 3:
-            bot.restrict_chat_member(
-                chat_id, user_id,
-                until_date=int(time.time()) + 600,
-                permissions=types.ChatPermissions(can_send_messages=False)
-            )
-            return count, True
-    except Exception:
-        log.exception("Auto mute after warnings failed")
-    return count, False
+# ---------------- AI ----------------
 
 def ai_answer(question, chat_title=""):
     if not AI_API_KEY or not AI_MODEL:
-        return "🤖 قابلیت هوش مصنوعی هنوز فعال نشده. مدیر ربات باید AI_API_KEY و AI_MODEL را در Environment هاست تنظیم کند."
+        return (
+            "🤖 هوش مصنوعی هنوز تنظیم نشده است.\n"
+            "مدیر باید AI_API_KEY و AI_MODEL سازگار را در Environment هاست تنظیم کند."
+        )
+
     url = AI_BASE_URL + "/chat/completions"
     payload = {
         "model": AI_MODEL,
         "messages": [
-            {"role": "system", "content": "تو دستیار فارسی‌زبان MASIH GUARD PRO هستی. واضح، دوستانه و ایمن به فارسی جواب بده. اگر سؤال مبهم است، کوتاه سؤال روشن‌کننده بپرس."},
-            {"role": "user", "content": question[:6000]}
+            {
+                "role": "system",
+                "content": (
+                    "تو دستیار فارسی‌زبان ربات MASIH GUARD PRO هستی. "
+                    "به فارسی روان، مودبانه و مفید جواب بده. "
+                    "اگر مطمئن نیستی، صادقانه بگو."
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"گروه: {chat_title}\n"
+                    f"سؤال: {question[:3500]}"
+                )
+            }
         ],
         "temperature": 0.7,
         "max_tokens": 900
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + AI_API_KEY,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://masih-guard.local",
-            "X-Title": BOT_NAME,
-        },
-        method="POST",
-    )
+
     try:
-        with urllib.request.urlopen(req, timeout=AI_TIMEOUT) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": "Bearer " + AI_API_KEY,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://masih-guard.local",
+                "X-Title": BOT_NAME
+            },
+            json=payload,
+            timeout=35
+        )
+        if response.status_code != 200:
+            log.error(
+                "AI API error %s: %s",
+                response.status_code, response.text[:500]
+            )
+            return (
+                "⚠️ سرویس هوش مصنوعی جواب نداد. "
+                "کلید، نام مدل و آدرس API را بررسی کن."
+            )
+
+        result = response.json()
         answer = result["choices"][0]["message"]["content"]
-        answer = str(answer).strip()
-        return answer[:3900] if answer else "جواب خالی دریافت شد؛ دوباره امتحان کن."
-    except urllib.error.HTTPError as e:
-        details = ""
-        try:
-            details = e.read().decode("utf-8", errors="ignore")[:400]
-        except Exception:
-            pass
-        log.warning("AI HTTP error %s: %s", e.code, details)
-        return f"⚠️ اتصال هوش مصنوعی خطا داد (کد {e.code}). کلید، مدل و آدرس API را بررسی کن."
+        if isinstance(answer, str) and answer.strip():
+            return answer[:4000]
+        return "⚠️ پاسخ هوش مصنوعی خالی بود."
     except Exception:
         log.exception("AI request failed")
-        return "⚠️ فعلاً اتصال هوش مصنوعی برقرار نشد؛ کمی بعد دوباره تلاش کن."
+        return "⚠️ اتصال به هوش مصنوعی ناموفق بود."
 
-# -------------------- Web health endpoints --------------------
-@app.get("/")
-def home():
-    return f"{BOT_NAME} is running"
+# ---------------- COMMANDS ----------------
 
-@app.get("/health")
-def health():
-    return jsonify({
-        "status": "ok",
-        "bot": BOT_NAME,
-        "version": VERSION,
-        "uptime_seconds": int(time.time() - START_TIME),
-        "ai_configured": bool(AI_API_KEY and AI_MODEL)
-    })
-
-# -------------------- Basic commands --------------------
 @bot.message_handler(commands=["start", "help"])
-def cmd_start(message):
+def start_command(message):
     text = (
-        f"🛡️ <b>{BOT_NAME} v{VERSION}</b>\n\n"
-        "ربات مدیریت و امنیت گروه.\n\n"
-        "دستورهای عمومی:\n"
-        "/help — راهنما\n/about — درباره ربات\n/rules — قوانین گروه\n"
-        "/ai پرسش — پرسیدن سؤال از هوش مصنوعی\n"
-        "/ping — بررسی پاسخ‌گویی\n\n"
-        "دستورهای مدیران:\n"
-        "/antilink on|off — ضدلینک\n"
-        "/antispam on|off — ضداسپم\n"
-        "/antiforward on|off — جلوگیری از پیام فورواردی\n"
-        "/welcome on|off — خوشامدگویی\n"
-        "/setrules متن — تنظیم قوانین\n"
-        "/addbad کلمه — افزودن کلمه به فیلتر\n"
-        "/delbad کلمه — حذف کلمه از فیلتر\n"
-        "/badlist — فهرست کلمات فیلتر\n"
-        "/warn (روی پیام ریپلای کن) — اخطار\n"
-        "/warnings (روی پیام ریپلای کن) — شمارش اخطار\n"
-        "/resetwarn (روی پیام ریپلای کن) — پاک‌کردن اخطارها\n"
-        "/mute (روی پیام ریپلای کن) — سکوت\n"
-        "/unmute (روی پیام ریپلای کن) — رفع سکوت\n"
-        "/ban (روی پیام ریپلای کن) — مسدودکردن\n"
-        "/unban شناسه — رفع مسدودی\n"
-        "/kick (روی پیام ریپلای کن) — اخراج\n"
-        "/purge عدد — پاک‌کردن پیام‌های اخیر (با ریپلای)\n"
-        "/setlog — تنظیم همین گروه به‌عنوان محل گزارش\n"
-        "/stats — آمار ساده گروه\n\n"
-        "برای کارکرد دستورهای مدیریتی، ربات باید مدیر گروه باشد."
+        f"🛡 {BOT_NAME} v{VERSION}\n\n"
+        "ربات مدیریت گروه فعال است.\n\n"
+        "دستورات:\n"
+        "/ping — بررسی وضعیت\n"
+        "/id — نمایش آیدی\n"
+        "/panel — پنل مدیریت\n"
+        "/rules — راهنمای دستورات\n"
+        "/ai سؤال — پرسیدن از هوش مصنوعی\n\n"
+        "دستورات مدیریتی در گروه:\n"
+        "/warn /warnings /unwarn\n"
+        "/mute /unmute /ban /unban /kick\n"
+        "/purge /addbadword /delbadword\n"
+        "/antilink_on /antilink_off\n"
+        "/antispam_on /antispam_off\n"
+        "/welcome_on /welcome_off"
     )
-    safe_reply(message, text)
-
-@bot.message_handler(commands=["about"])
-def cmd_about(message):
-    safe_reply(message, f"🛡️ <b>{BOT_NAME}</b>\nنسخه: {VERSION}\nسازنده: مسیح مختاری\nامنیت گروه + ابزارهای کاربردی + پاسخ‌گویی هوش مصنوعی (با تنظیم API).")
+    reply_safe(message, text)
 
 @bot.message_handler(commands=["ping"])
-def cmd_ping(message):
-    safe_reply(message, f"🏓 Pong!\n⏱️ {int(time.time() - START_TIME)} ثانیه از شروع این اجرا گذشته.")
+def ping_command(message):
+    reply_safe(message, f"✅ {BOT_NAME} فعال است.\nنسخه: {VERSION}")
+
+@bot.message_handler(commands=["id"])
+def id_command(message):
+    user = message.from_user
+    reply_safe(
+        message,
+        f"👤 آیدی شما: {user.id}\n"
+        f"💬 آیدی گفتگو: {message.chat.id}"
+    )
 
 @bot.message_handler(commands=["rules"])
-def cmd_rules(message):
-    if not is_group(message):
-        safe_reply(message, "قوانین را داخل گروه ببین.")
-        return
-    safe_reply(message, "📜 <b>قوانین گروه</b>\n" + group_settings(message.chat.id)["rules"])
+def rules_command(message):
+    reply_safe(
+        message,
+        "📘 راهنمای مدیران\n"
+        "برای مدیریت کاربر، روی پیام او ریپلای کن و دستور را بفرست.\n"
+        "برای مثال: /warn\n"
+        "برای حذف چند پیام: روی پیام آخر ریپلای کن و /purge بزن.\n"
+        "برای پرسیدن سؤال: /ai سؤال خودت"
+    )
 
-@bot.message_handler(commands=["setrules"])
-def cmd_setrules(message):
-    if not require_admin(message):
+@bot.message_handler(commands=["ai"])
+def ai_command(message):
+    question = (message.text or "").partition(" ")[2].strip()
+    if not question and message.reply_to_message:
+        question = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or ""
+        ).strip()
+    if not question:
+        reply_safe(message, "مثال: /ai درباره فضا توضیح بده")
         return
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        safe_reply(message, "روش استفاده: /setrules متن قوانین")
-        return
-    group_settings(message.chat.id)["rules"] = parts[1][:3500]
-    save_data()
-    safe_reply(message, "✅ قوانین ذخیره شد.")
 
-def setting_command(name, label):
-    def handler(message):
-        if not require_admin(message):
+    status = reply_safe(message, "🤖 دارم فکر می‌کنم...")
+    answer = ai_answer(question, getattr(message.chat, "title", "") or "")
+    try:
+        if status:
+            bot.edit_message_text(
+                answer, message.chat.id, status.message_id
+            )
+        else:
+            reply_safe(message, answer)
+    except Exception:
+        reply_safe(message, answer)
+
+@bot.message_handler(commands=["panel"])
+def panel_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ پنل فقط برای مدیران گروه است.")
+        return
+
+    settings = chat_settings(message.chat.id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(
+            "لینک: روشن" if settings["anti_link"] else "لینک: خاموش",
+            callback_data="toggle:anti_link"
+        ),
+        types.InlineKeyboardButton(
+            "ضداسپم: روشن" if settings["anti_spam"] else "ضداسپم: خاموش",
+            callback_data="toggle:anti_spam"
+        ),
+        types.InlineKeyboardButton(
+            "فیلتر کلمات: روشن" if settings["badword_filter"] else "فیلتر کلمات: خاموش",
+            callback_data="toggle:badword_filter"
+        ),
+        types.InlineKeyboardButton(
+            "خوشامد: روشن" if settings["welcome_enabled"] else "خوشامد: خاموش",
+            callback_data="toggle:welcome_enabled"
+        )
+    )
+    bot.send_message(
+        message.chat.id,
+        "⚙️ پنل تنظیمات MASIH GUARD PRO",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("toggle:"))
+def panel_callback(call):
+    try:
+        if not is_admin(call.message.chat.id, call.from_user.id):
+            bot.answer_callback_query(
+                call.id, "فقط مدیر گروه می‌تواند تنظیمات را تغییر دهد.",
+                show_alert=True
+            )
             return
-        parts = (message.text or "").split()
-        if len(parts) != 2 or parts[1].lower() not in ("on", "off"):
-            safe_reply(message, f"روش استفاده: /{name} on یا /{name} off")
+        key = call.data.split(":", 1)[1]
+        allowed = {
+            "anti_link", "anti_spam",
+            "badword_filter", "welcome_enabled"
+        }
+        if key not in allowed:
+            bot.answer_callback_query(call.id, "تنظیم نامعتبر است.")
             return
-        group_settings(message.chat.id)[name] = parts[1].lower() == "on"
+        settings = chat_settings(call.message.chat.id)
+        settings[key] = not settings[key]
         save_data()
-        safe_reply(message, f"✅ {label}: {'روشن' if parts[1].lower() == 'on' else 'خاموش'}")
-    handler.__name__ = "cmd_" + name
-    return handler
+        bot.answer_callback_query(call.id, "تنظیمات ذخیره شد.")
+        panel_command(call.message)
+    except Exception:
+        log.exception("Panel callback failed")
 
-bot.message_handler(commands=["antilink"])(setting_command("antilink", "ضدلینک"))
-bot.message_handler(commands=["antispam"])(setting_command("antispam", "ضداسپم"))
-bot.message_handler(commands=["antiforward"])(setting_command("antiforward", "ضدفوروارد"))
-bot.message_handler(commands=["welcome"])(setting_command("welcome", "خوشامدگویی"))
-
-@bot.message_handler(commands=["addbad"])
-def cmd_addbad(message):
-    if not require_admin(message):
-        return
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        safe_reply(message, "روش استفاده: /addbad کلمه")
-        return
-    words = group_settings(message.chat.id).setdefault("badwords", [])
-    word = parts[1].strip()[:100]
-    if normalized(word) not in [normalized(w) for w in words]:
-        words.append(word)
-        save_data()
-    safe_reply(message, f"✅ کلمه «{word}» به فیلتر اضافه شد.")
-
-@bot.message_handler(commands=["delbad"])
-def cmd_delbad(message):
-    if not require_admin(message):
-        return
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        safe_reply(message, "روش استفاده: /delbad کلمه")
-        return
-    s = group_settings(message.chat.id)
-    s["badwords"] = [w for w in s.get("badwords", []) if normalized(w) != normalized(parts[1])]
-    save_data()
-    safe_reply(message, "✅ اگر کلمه در فهرست بود، حذف شد.")
-
-@bot.message_handler(commands=["badlist"])
-def cmd_badlist(message):
-    if not require_admin(message):
-        return
-    words = group_settings(message.chat.id).get("badwords", [])
-    safe_reply(message, "📋 کلمات فیلتر:\n" + ("\n".join("• " + w for w in words) if words else "فهرست خالی است."))
+# ---------------- ADMIN COMMANDS ----------------
 
 @bot.message_handler(commands=["warn"])
-def cmd_warn(message):
-    if not require_admin(message):
+def warn_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
         return
-    if not message.reply_to_message:
-        safe_reply(message, "برای اخطار، روی پیام کاربر ریپلای کن و /warn بزن.")
-        return
-    target = message.reply_to_message.from_user
-    if target.is_bot:
-        safe_reply(message, "به ربات‌ها اخطار نمی‌دهم.")
-        return
-    count, muted = warn_user(message.chat.id, target.id, "اخطار مدیر")
-    safe_reply(message, f"⚠️ {mention(target)} اخطار گرفت. تعداد: {count}/3" + ("\n🔇 به‌دلیل رسیدن به ۳ اخطار، ۱۰ دقیقه سکوت شد." if muted else ""))
+    count = add_warning(message.chat.id, target_id)
+    max_warnings = chat_settings(message.chat.id)["max_warnings"]
+    reply_safe(
+        message,
+        f"⚠️ اخطار ثبت شد.\nتعداد اخطار: {count}/{max_warnings}"
+    )
+    if count >= max_warnings:
+        try:
+            bot.ban_chat_member(message.chat.id, target_id)
+            reply_safe(message, "⛔ سقف اخطارها رسید؛ کاربر مسدود شد.")
+            log_action(message.chat.id, f"Auto-ban {target_id}")
+        except Exception:
+            reply_safe(message, "⚠️ ربات اجازه مسدودسازی ندارد.")
 
 @bot.message_handler(commands=["warnings"])
-def cmd_warnings(message):
-    if not is_group(message):
-        return
-    target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
-    count = group_settings(message.chat.id).get("warnings", {}).get(str(target.id), 0)
-    safe_reply(message, f"⚠️ تعداد اخطارهای {mention(target)}: {count}")
+def warnings_command(message):
+    target_id = target_user_id(message) or message.from_user.id
+    reply_safe(
+        message,
+        f"⚠️ تعداد اخطارها: {warning_count(message.chat.id, target_id)}"
+    )
 
-@bot.message_handler(commands=["resetwarn"])
-def cmd_resetwarn(message):
-    if not require_admin(message):
+@bot.message_handler(commands=["unwarn"])
+def unwarn_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
         return
-    if not message.reply_to_message:
-        safe_reply(message, "روی پیام کاربر ریپلای کن و /resetwarn بزن.")
-        return
-    target = message.reply_to_message.from_user
-    group_settings(message.chat.id).setdefault("warnings", {}).pop(str(target.id), None)
+    key = f"{message.chat.id}:{target_id}"
+    data["warnings"][key] = 0
     save_data()
-    safe_reply(message, f"✅ اخطارهای {mention(target)} پاک شد.")
+    reply_safe(message, "✅ اخطارهای این کاربر پاک شد.")
 
 @bot.message_handler(commands=["mute"])
-def cmd_mute(message):
-    if not require_admin(message):
-        return
-    target_id, reason = extract_target_and_reason(message)
-    if not target_id:
-        safe_reply(message, "روی پیام کاربر ریپلای کن و /mute بزن؛ یا /mute شناسه")
+def mute_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
         return
     try:
-        bot.restrict_chat_member(message.chat.id, target_id, until_date=int(time.time()) + 600,
-                                 permissions=types.ChatPermissions(can_send_messages=False))
-        safe_reply(message, f"🔇 کاربر برای ۱۰ دقیقه سکوت شد.\nدلیل: {reason}")
-        send_log(message.chat.id, f"🔇 MUTE | chat={message.chat.id} user={target_id} by={message.from_user.id} reason={reason}")
-    except Exception as e:
-        safe_reply(message, f"❌ سکوت انجام نشد. بررسی کن ربات مدیر و دارای دسترسی محدودکردن اعضا باشد.\n{str(e)[:250]}")
+        until = int(time.time()) + 3600
+        bot.restrict_chat_member(
+            message.chat.id,
+            target_id,
+            until_date=until,
+            permissions=types.ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False
+            )
+        )
+        reply_safe(message, "🔇 کاربر برای یک ساعت سکوت شد.")
+        log_action(message.chat.id, f"Mute {target_id}")
+    except Exception:
+        log.exception("Mute failed")
+        reply_safe(message, "⚠️ نتوانستم کاربر را سکوت کنم؛ دسترسی ادمین را بررسی کن.")
 
 @bot.message_handler(commands=["unmute"])
-def cmd_unmute(message):
-    if not require_admin(message):
-        return
-    target_id, _ = extract_target_and_reason(message)
-    if not target_id:
-        safe_reply(message, "روی پیام کاربر ریپلای کن و /unmute بزن؛ یا /unmute شناسه")
+def unmute_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
         return
     try:
-        bot.restrict_chat_member(message.chat.id, target_id,
-                                 permissions=types.ChatPermissions(
-                                     can_send_messages=True, can_send_audios=True,
-                                     can_send_documents=True, can_send_photos=True,
-                                     can_send_videos=True, can_send_video_notes=True,
-                                     can_send_voice_notes=True, can_send_polls=True,
-                                     can_send_other_messages=True, can_add_web_page_previews=True
-                                 ))
-        safe_reply(message, "🔊 سکوت کاربر برداشته شد.")
-    except Exception as e:
-        safe_reply(message, f"❌ رفع سکوت انجام نشد: {str(e)[:250]}")
+        bot.restrict_chat_member(
+            message.chat.id,
+            target_id,
+            permissions=types.ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        )
+        reply_safe(message, "🔊 سکوت کاربر برداشته شد.")
+    except Exception:
+        reply_safe(message, "⚠️ نتوانستم سکوت را بردارم.")
 
-@bot.message_handler(commands=["ban", "kick"])
-def cmd_ban_kick(message):
-    if not require_admin(message):
-        return
-    cmd = (message.text or "").split()[0].split("@")[0].lower()
-    target_id, reason = extract_target_and_reason(message)
-    if not target_id:
-        safe_reply(message, "روی پیام کاربر ریپلای کن و دستور را بزن؛ یا شناسه را وارد کن.")
+@bot.message_handler(commands=["ban"])
+def ban_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
         return
     try:
         bot.ban_chat_member(message.chat.id, target_id)
-        if cmd == "/kick":
-            bot.unban_chat_member(message.chat.id, target_id, only_if_banned=True)
-            safe_reply(message, f"👢 کاربر از گروه اخراج شد.\nدلیل: {reason}")
-        else:
-            safe_reply(message, f"⛔ کاربر مسدود شد.\nدلیل: {reason}")
-        send_log(message.chat.id, f"{cmd.upper()} | chat={message.chat.id} user={target_id} by={message.from_user.id} reason={reason}")
-    except Exception as e:
-        safe_reply(message, f"❌ عملیات انجام نشد. دسترسی مدیر ربات را بررسی کن.\n{str(e)[:250]}")
+        reply_safe(message, "⛔ کاربر مسدود شد.")
+        log_action(message.chat.id, f"Ban {target_id}")
+    except Exception:
+        reply_safe(message, "⚠️ مسدودسازی ناموفق بود.")
 
 @bot.message_handler(commands=["unban"])
-def cmd_unban(message):
-    if not require_admin(message):
+def unban_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
         return
     parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-        safe_reply(message, "روش استفاده: /unban شناسه_عددی_کاربر")
+    if len(parts) < 2 or not parts[1].isdigit():
+        reply_safe(message, "استفاده: /unban آیدی_عددی")
         return
     try:
-        bot.unban_chat_member(message.chat.id, int(parts[1]), only_if_banned=True)
-        safe_reply(message, "✅ مسدودی کاربر برداشته شد.")
-    except Exception as e:
-        safe_reply(message, f"❌ رفع مسدودی انجام نشد: {str(e)[:250]}")
+        bot.unban_chat_member(message.chat.id, int(parts[1]))
+        reply_safe(message, "✅ مسدودیت برداشته شد.")
+    except Exception:
+        reply_safe(message, "⚠️ رفع مسدودیت ناموفق بود.")
+
+@bot.message_handler(commands=["kick"])
+def kick_command(message):
+    target_id = target_user_id(message)
+    if not ensure_manageable(message, target_id):
+        return
+    try:
+        bot.ban_chat_member(message.chat.id, target_id)
+        bot.unban_chat_member(message.chat.id, target_id)
+        reply_safe(message, "👢 کاربر از گروه اخراج شد.")
+    except Exception:
+        reply_safe(message, "⚠️ اخراج کاربر ناموفق بود.")
 
 @bot.message_handler(commands=["purge"])
-def cmd_purge(message):
-    if not require_admin(message):
+def purge_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
         return
     if not message.reply_to_message:
-        safe_reply(message, "روی اولین پیام موردنظر ریپلای کن و /purge تعداد بزن.")
+        reply_safe(message, "برای پاک‌کردن پیام‌ها، روی پیام آخر ریپلای کن.")
         return
-    parts = (message.text or "").split()
-    amount = 10
-    if len(parts) > 1 and parts[1].isdigit():
-        amount = max(1, min(100, int(parts[1])))
+
     start_id = message.reply_to_message.message_id
+    end_id = message.message_id
+    if end_id - start_id > 100:
+        start_id = end_id - 100
+
     deleted = 0
-    for mid in range(start_id, start_id + amount):
+    for msg_id in range(start_id, end_id + 1):
         try:
-            bot.delete_message(message.chat.id, mid)
+            bot.delete_message(message.chat.id, msg_id)
             deleted += 1
         except Exception:
             pass
     try:
-        bot.delete_message(message.chat.id, message.message_id)
+        bot.send_message(
+            message.chat.id,
+            f"🧹 پاک‌سازی انجام شد. تعداد پیام‌های پاک‌شده: {deleted}"
+        )
     except Exception:
         pass
-    safe_reply(message, f"🧹 {deleted} پیام پاک شد.")
 
-@bot.message_handler(commands=["setlog"])
-def cmd_setlog(message):
-    if not require_admin(message):
+# ---------------- FILTER SETTINGS ----------------
+
+def set_setting_command(message, setting, value):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
         return
-    group_settings(message.chat.id)["log_chat_id"] = message.chat.id
+    chat_settings(message.chat.id)[setting] = value
     save_data()
-    safe_reply(message, "✅ گزارش‌های مدیریتی در همین گروه ثبت می‌شوند.")
+    reply_safe(message, "✅ تنظیم ذخیره شد.")
 
-@bot.message_handler(commands=["stats"])
-def cmd_stats(message):
-    if not is_group(message):
-        safe_reply(message, "این دستور برای گروه است.")
+@bot.message_handler(commands=["antilink_on"])
+def antilink_on(message):
+    set_setting_command(message, "anti_link", True)
+
+@bot.message_handler(commands=["antilink_off"])
+def antilink_off(message):
+    set_setting_command(message, "anti_link", False)
+
+@bot.message_handler(commands=["antispam_on"])
+def antispam_on(message):
+    set_setting_command(message, "anti_spam", True)
+
+@bot.message_handler(commands=["antispam_off"])
+def antispam_off(message):
+    set_setting_command(message, "anti_spam", False)
+
+@bot.message_handler(commands=["welcome_on"])
+def welcome_on(message):
+    set_setting_command(message, "welcome_enabled", True)
+
+@bot.message_handler(commands=["welcome_off"])
+def welcome_off(message):
+    set_setting_command(message, "welcome_enabled", False)
+
+@bot.message_handler(commands=["addbadword"])
+def addbadword_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
         return
-    s = group_settings(message.chat.id)
-    try:
-        count = bot.get_chat_member_count(message.chat.id)
-    except Exception:
-        count = "نامشخص"
-    safe_reply(message, f"📊 <b>آمار گروه</b>\n👥 اعضا: {count}\n🔗 ضدلینک: {'روشن' if s['antilink'] else 'خاموش'}\n🚫 ضداسپم: {'روشن' if s['antispam'] else 'خاموش'}\n👋 خوشامد: {'روشن' if s['welcome'] else 'خاموش'}\n🧾 کلمات فیلتر: {len(s.get('badwords', []))}")
-
-@bot.message_handler(commands=["ai"])
-def cmd_ai(message):
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        safe_reply(message, "روش استفاده: /ai سؤال خودت را بنویس")
+    word = (message.text or "").partition(" ")[2].strip()
+    if not word:
+        reply_safe(message, "استفاده: /addbadword کلمه")
         return
-    status = safe_reply(message, "🤖 دارم فکر می‌کنم...")
-    answer = ai_answer(parts[1], message.chat.title if message.chat else "")
-    try:
-        if status:
-            bot.edit_message_text(answer, message.chat.id, status.message_id)
-        else:
-            safe_reply(message, answer)
-    except Exception:
-        safe_reply(message, answer)
+    with lock:
+        words = data["badwords"].setdefault(str(message.chat.id), [])
+        if word.casefold() not in [w.casefold() for w in words]:
+            words.append(word[:100])
+    save_data()
+    reply_safe(message, "✅ کلمه به فیلتر اضافه شد.")
 
-# -------------------- Welcome / moderation --------------------
+@bot.message_handler(commands=["delbadword"])
+def delbadword_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
+        return
+    word = (message.text or "").partition(" ")[2].strip()
+    if not word:
+        reply_safe(message, "استفاده: /delbadword کلمه")
+        return
+    with lock:
+        key = str(message.chat.id)
+        data["badwords"][key] = [
+            w for w in data["badwords"].get(key, [])
+            if w.casefold() != word.casefold()
+        ]
+    save_data()
+    reply_safe(message, "✅ کلمه از فیلتر حذف شد.")
+
+@bot.message_handler(commands=["badwords"])
+def badwords_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ فقط مدیر گروه.")
+        return
+    words = get_badwords(message.chat.id)
+    reply_safe(
+        message,
+        "📃 کلمات فیلتر:\n" + ("\n".join(words) if words else "هنوز کلمه‌ای ثبت نشده.")
+    )
+
+# ---------------- NEW MEMBERS ----------------
+
 @bot.message_handler(content_types=["new_chat_members"])
-def new_members(message):
-    if not is_group(message):
+def welcome_new_members(message):
+    settings = chat_settings(message.chat.id)
+    if not settings["welcome_enabled"]:
         return
-    s = group_settings(message.chat.id)
-    if not s.get("welcome", True):
+    for user in message.new_chat_members:
+        if user.is_bot:
+            continue
+        name = user.first_name or "دوست عزیز"
+        try:
+            bot.send_message(
+                message.chat.id,
+                f"👋 خوش اومدی {name}!\n"
+                f"به گروه {message.chat.title or ''} خوش اومدی 🌹"
+            )
+        except Exception:
+            log.exception("Welcome message failed")
+
+# ---------------- MESSAGE MODERATION ----------------
+
+@bot.message_handler(
+    func=lambda m: bool(m.text or m.caption),
+    content_types=["text", "photo", "video", "document",
+                   "audio", "voice", "animation", "sticker"]
+)
+def moderate_message(message):
+    if not message.from_user:
         return
-    for member in message.new_chat_members:
-        if member.id == bot.get_me().id:
-            safe_reply(message, f"سلام! من <b>{BOT_NAME}</b> هستم.\nبرای دیدن دستورها /help را بزن.")
-        else:
-            safe_reply(message, f"👋 خوش اومدی {mention(member)}!\nلطفاً قوانین گروه رو با /rules بخون.")
-
-@bot.message_handler(content_types=["left_chat_member"])
-def left_member(message):
-    try:
-        if is_group(message) and group_settings(message.chat.id).get("welcome", True):
-            safe_reply(message, "👋 یکی از اعضا گروه را ترک کرد.")
-    except Exception:
-        log.exception("Goodbye handler failed")
-
-# In-memory anti-flood tracking
-recent_messages = defaultdict(lambda: deque(maxlen=8))
-last_duplicate = {}
-
-@bot.message_handler(func=lambda m: bool(m and m.text and not (m.text or "").startswith("/")), content_types=["text"])
-def moderate_text(message):
-    if not is_group(message) or not data.get("bot_enabled", True):
+    if message.from_user.is_bot:
         return
-    if not message.from_user or message.from_user.is_bot:
+    if message.chat.type not in ("group", "supergroup"):
         return
-    if is_admin(message) or is_owner(message.from_user.id):
+
+    text_value = (message.text or message.caption or "").strip()
+    settings = chat_settings(message.chat.id)
+
+    if is_admin(message.chat.id, message.from_user.id):
         return
-    s = group_settings(message.chat.id)
-    text_body = message.text or ""
-    reason = None
 
-    if s.get("antilink", True) and contains_link(text_body):
-        reason = "ارسال لینک"
-    elif contains_badword(text_body, s.get("badwords", [])):
-        reason = "کلمه فیلترشده"
-    elif s.get("antiforward", False) and getattr(message, "forward_origin", None):
-        reason = "پیام فورواردی"
-    elif s.get("antispam", True):
-        key = (message.chat.id, message.from_user.id)
-        now = time.time()
-        q = recent_messages[key]
-        q.append(now)
-        if len(q) >= 6 and q[-1] - q[0] < 7:
-            reason = "ارسال پیام‌های پیاپی"
-        dupkey = (message.chat.id, message.from_user.id)
-        old = last_duplicate.get(dupkey)
-        if old and old[0] == normalized(text_body) and now - old[1] < 15:
-            reason = "تکرار پیام"
-        last_duplicate[dupkey] = (normalized(text_body), now)
-
-    if reason:
+    if settings["anti_link"] and is_link(text_value):
         try:
             bot.delete_message(message.chat.id, message.message_id)
-        except Exception:
-            log.info("Could not delete offending message in %s", message.chat.id)
-        count, muted = warn_user(message.chat.id, message.from_user.id, reason)
-        safe_reply(message, f"⚠️ {mention(message.from_user)} پیام حذف شد: {reason}.\nاخطار: {count}/3" + ("\n🔇 سکوت ۱۰ دقیقه‌ای فعال شد." if muted else ""))
-        send_log(message.chat.id, f"MODERATION | chat={message.chat.id} user={message.from_user.id} reason={reason} warnings={count}")
-
-# -------------------- Utility commands --------------------
-@bot.message_handler(commands=["coin"])
-def cmd_coin(message):
-    safe_reply(message, random.choice(["🪙 شیر", "🪙 خط"]))
-
-@bot.message_handler(commands=["dice"])
-def cmd_dice(message):
-    safe_reply(message, f"🎲 عدد تو: {random.randint(1, 6)}")
-
-@bot.message_handler(commands=["calc"])
-def cmd_calc(message):
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        safe_reply(message, "روش استفاده: /calc 12*(3+4)")
-        return
-    expr = parts[1].strip()
-    if len(expr) > 100 or not re.fullmatch(r"[0-9+\-*/(). %]+", expr):
-        safe_reply(message, "❌ فقط محاسبات ساده عددی مجاز است.")
-        return
-    try:
-        # Safe arithmetic parser: no names, calls, attributes or other Python syntax.
-        import ast
-        tree = ast.parse(expr, mode="eval")
-        allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Add, ast.Sub,
-                   ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.USub, ast.UAdd)
-        if any(not isinstance(node, allowed) for node in ast.walk(tree)):
-            raise ValueError("unsupported")
-        result = eval(compile(tree, "<calc>", "eval"), {"__builtins__": {}}, {})
-        if isinstance(result, (int, float)) and math.isfinite(result):
-            safe_reply(message, f"🧮 جواب: <code>{result}</code>")
-        else:
-            safe_reply(message, "❌ نتیجه معتبر نیست.")
-    except Exception:
-        safe_reply(message, "❌ عبارت ریاضی معتبر نیست.")
-
-# -------------------- Callback panel --------------------
-@bot.message_handler(commands=["panel"])
-def cmd_panel(message):
-    if not is_admin_or_owner(message):
-        safe_reply(message, "⛔ پنل فقط برای مدیر گروه یا مالک ربات است.")
-        return
-    if not is_group(message):
-        safe_reply(message, "پنل را داخل گروه باز کن.")
-        return
-    s = group_settings(message.chat.id)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        types.InlineKeyboardButton(f"ضدلینک: {'روشن' if s['antilink'] else 'خاموش'}", callback_data="toggle:antilink"),
-        types.InlineKeyboardButton(f"ضداسپم: {'روشن' if s['antispam'] else 'خاموش'}", callback_data="toggle:antispam"),
-        types.InlineKeyboardButton(f"فوروارد: {'روشن' if s['antiforward'] else 'خاموش'}", callback_data="toggle:antiforward"),
-        types.InlineKeyboardButton(f"خوشامد: {'روشن' if s['welcome'] else 'خاموش'}", callback_data="toggle:welcome"),
-    )
-    kb.add(types.InlineKeyboardButton("📊 آمار", callback_data="panel:stats"),
-           types.InlineKeyboardButton("📜 قوانین", callback_data="panel:rules"))
-    safe_reply(message, "🎛️ <b>پنل مدیریت MASIH GUARD PRO</b>\nبرای تغییر وضعیت، دکمه را بزن:", reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda call: bool(call.data and (call.data.startswith("toggle:") or call.data.startswith("panel:"))))
-def panel_callback(call):
-    try:
-        chat_id = call.message.chat.id
-        member = bot.get_chat_member(chat_id, call.from_user.id)
-        if member.status not in ("administrator", "creator") and not is_owner(call.from_user.id):
-            bot.answer_callback_query(call.id, "فقط مدیران اجازه دارند.", show_alert=True)
-            return
-        s = group_settings(chat_id)
-        if call.data.startswith("toggle:"):
-            key = call.data.split(":", 1)[1]
-            if key not in ("antilink", "antispam", "antiforward", "welcome"):
-                bot.answer_callback_query(call.id, "گزینه نامعتبر است.")
-                return
-            s[key] = not s.get(key, False)
-            save_data()
-            bot.answer_callback_query(call.id, "تنظیم ذخیره شد.")
-            # Refresh panel buttons by editing the original message.
-            kb = types.InlineKeyboardMarkup(row_width=2)
-            kb.add(
-                types.InlineKeyboardButton(f"ضدلینک: {'روشن' if s['antilink'] else 'خاموش'}", callback_data="toggle:antilink"),
-                types.InlineKeyboardButton(f"ضداسپم: {'روشن' if s['antispam'] else 'خاموش'}", callback_data="toggle:antispam"),
-                types.InlineKeyboardButton(f"فوروارد: {'روشن' if s['antiforward'] else 'خاموش'}", callback_data="toggle:antiforward"),
-                types.InlineKeyboardButton(f"خوشامد: {'روشن' if s['welcome'] else 'خاموش'}", callback_data="toggle:welcome"),
+            bot.send_message(
+                message.chat.id,
+                f"🔗 {message.from_user.first_name} ارسال لینک در گروه مجاز نیست."
             )
-            kb.add(types.InlineKeyboardButton("📊 آمار", callback_data="panel:stats"),
-                   types.InlineKeyboardButton("📜 قوانین", callback_data="panel:rules"))
-            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb)
-        elif call.data == "panel:rules":
-            bot.answer_callback_query(call.id)
-            bot.send_message(chat_id, "📜 قوانین:\n" + s["rules"])
-        elif call.data == "panel:stats":
-            bot.answer_callback_query(call.id)
-            bot.send_message(chat_id, f"📊 ضدلینک: {s['antilink']}\nضداسپم: {s['antispam']}\nکلمات فیلتر: {len(s.get('badwords', []))}")
-    except Exception:
-        log.exception("Panel callback failed")
-        try:
-            bot.answer_callback_query(call.id, "خطا رخ داد؛ دوباره تلاش کن.")
+            log_action(message.chat.id, f"Link removed from {message.from_user.id}")
         except Exception:
-            pass
+            log.exception("Could not remove link")
+        return
 
-# -------------------- Startup and reconnect --------------------
-def run_web():
-    port = int(os.getenv("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
+    if settings["badword_filter"] and text_value:
+        words = get_badwords(message.chat.id)
+        if any(w.casefold() in text_value.casefold() for w in words):
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+                log_action(message.chat.id, f"Bad word removed from {message.from_user.id}")
+            except Exception:
+                log.exception("Could not remove bad word message")
+            return
+
+    if settings["anti_spam"]:
+        now = time.time()
+        key = (message.chat.id, message.from_user.id)
+        history = spam_history[key]
+        history.append(now)
+        window = settings["spam_window"]
+        while history and now - history[0] > window:
+            history.popleft()
+
+        if len(history) > settings["max_messages"]:
+            try:
+                bot.delete_message(message.chat.id, message.message_id)
+                bot.restrict_chat_member(
+                    message.chat.id,
+                    message.from_user.id,
+                    until_date=int(time.time()) + 60,
+                    permissions=types.ChatPermissions(can_send_messages=False)
+                )
+                bot.send_message(
+                    message.chat.id,
+                    f"🚫 {message.from_user.first_name} به دلیل ارسال پیام‌های زیاد، یک دقیقه سکوت شد."
+                )
+                history.clear()
+                log_action(message.chat.id, f"Anti-spam mute {message.from_user.id}")
+            except Exception:
+                log.exception("Anti-spam action failed")
+
+# ---------------- BOT RUNNER ----------------
 
 def run_bot_forever():
     delay = 3
@@ -716,19 +755,31 @@ def run_bot_forever():
         try:
             log.info("Starting %s v%s", BOT_NAME, VERSION)
             try:
-                bot.remove_webhook(drop_pending_updates=False)
+                # Compatible with pyTelegramBotAPI versions
+                bot.remove_webhook()
             except Exception:
-                log.exception("Could not remove webhook (continuing)")
-            bot.infinity_polling(timeout=30, long_polling_timeout=25, skip_pending=False)
+                log.exception("Could not remove webhook; continuing")
+            bot.infinity_polling(
+                timeout=30,
+                long_polling_timeout=25,
+                skip_pending=False
+            )
             delay = 3
         except KeyboardInterrupt:
             log.info("Stopped by keyboard")
             break
         except Exception:
-            log.exception("Polling stopped unexpectedly; reconnecting in %s seconds", delay)
+            log.exception(
+                "Polling stopped unexpectedly; reconnecting in %s seconds",
+                delay
+            )
             time.sleep(delay)
             delay = min(delay * 2, 60)
 
+def start_flask():
+    app.run(host="0.0.0.0", port=PORT, use_reloader=False)
+
 if __name__ == "__main__":
-    threading.Thread(target=run_web, daemon=True).start()
+    thread = threading.Thread(target=start_flask, daemon=True)
+    thread.start()
     run_bot_forever()
