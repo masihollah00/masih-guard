@@ -36,6 +36,12 @@ DEFAULT_DATA = {
     "tickets": {}, "points": {}, "seen": {}, "stats": {"messages": 0, "blocked": 0,
     "warns": 0, "joins": 0, "tickets": 0},
     "settings": {"smart_security": True},
+    "bot_settings": {
+        "public_features": "", "channel_url": "https://t.me/IRHACK_APP33",
+        "website_url": "https://neon-portfolio-7vhj.onrender.com",
+        "daily_reward": 10, "luck_max": 5, "referral_reward": 5,
+        "shop_packages": [[40, 15], [80, 30], [120, 45], [160, 60]]
+    },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
     "last_daily": {}
 }
@@ -116,6 +122,24 @@ def get_group_settings(chat_id):
     for k, v in DEFAULT_GROUP.items(): settings.setdefault(k, clone(v))
     return settings
 
+def bot_settings():
+    """Return persisted global settings, filling defaults for older data files."""
+    defaults = DEFAULT_DATA["bot_settings"]
+    settings = DATA.setdefault("bot_settings", clone(defaults))
+    for key, value in defaults.items():
+        settings.setdefault(key, clone(value))
+    if not isinstance(settings.get("shop_packages"), list) or not settings["shop_packages"]:
+        settings["shop_packages"] = clone(defaults["shop_packages"])
+    return settings
+
+def public_features_text():
+    custom = str(bot_settings().get("public_features", "") or "").strip()
+    return esc(custom) if custom else PUBLIC_FEATURES
+
+def configured_url(key, fallback):
+    value = str(bot_settings().get(key, "") or fallback).strip()
+    return value if value.startswith(("https://", "http://")) else fallback
+
 def is_group_admin(chat_id, user_id):
     if is_owner(user_id): return True
     try: return bot.get_chat_member(chat_id, user_id).status in ("administrator", "creator")
@@ -129,7 +153,8 @@ SECTIONS = {
     "stats":"📊 آمار و گزارش", "customers":"💼 مشتریان و اشتراک",
     "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی", "games":"🎮 بازی و امتیاز",
     "backup":"💾 پشتیبان‌گیری", "daily":"📅 گزارش روزانه",
-    "smart":"🧩 امنیت هوشمند", "status":"🚀 وضعیت ربات"
+    "smart":"🧩 امنیت هوشمند", "status":"🚀 وضعیت ربات",
+    "bot_settings":"🎛️ تنظیمات عمومی ربات"
 }
 
 PUBLIC_FEATURES = (
@@ -164,8 +189,8 @@ def public_keyboard():
            types.InlineKeyboardButton("🌐 پروکسی‌ها", callback_data="user:proxies"))
     kb.row(types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"),
            types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
-    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=CHANNEL_URL),
-           types.InlineKeyboardButton("🌐 وب‌سایت", url=WEBSITE_URL))
+    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=configured_url("channel_url", CHANNEL_URL)),
+           types.InlineKeyboardButton("🌐 وب‌سایت", url=configured_url("website_url", WEBSITE_URL)))
     return kb
 
 def main_keyboard():
@@ -178,8 +203,8 @@ def main_keyboard():
             row.append(types.InlineKeyboardButton(f'{palette[(i+j) % len(palette)]} {title}',
                                                    callback_data='panel:'+key))
         kb.row(*row)
-    kb.row(types.InlineKeyboardButton("🌐 وب‌سایت رسمی", url=WEBSITE_URL))
-    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=CHANNEL_URL))
+    kb.row(types.InlineKeyboardButton("🌐 وب‌سایت رسمی", url=configured_url("website_url", WEBSITE_URL)))
+    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=configured_url("channel_url", CHANNEL_URL)))
     return kb
 
 def section_keyboard(section):
@@ -200,7 +225,17 @@ def section_keyboard(section):
       "backup":[("💾 دریافت نسخه پشتیبان","show:backup")],
       "daily":[("📅 گزارش روزانه","show:daily")],
       "smart":[("🧩 روشن/خاموش امنیت هوشمند","toggle:smart_security")],
-      "status":[("🚀 وضعیت ربات","show:status")]
+      "status":[("🚀 وضعیت ربات","show:status")],
+      "bot_settings":[
+        ("📝 متن معرفی /start","ask:public_features"),
+        ("📢 تغییر لینک کانال","ask:channel_url"),
+        ("🌐 تغییر لینک وب‌سایت","ask:website_url"),
+        ("🎁 تنظیم پاداش روزانه","ask:daily_reward"),
+        ("🍀 تنظیم سقف شانس الماس","ask:luck_max"),
+        ("👥 تنظیم پاداش دعوت","ask:referral_reward"),
+        ("🛒 تنظیم بسته‌های اشتراک","ask:shop_packages"),
+        ("📋 مشاهده تنظیمات فعلی","show:bot_settings")
+      ]
     }
     for label, data in choices.get(section, []):
         kb.add(types.InlineKeyboardButton(label, callback_data=data))
@@ -241,9 +276,11 @@ def apply_referral(uid, payload):
     ensure_user(uid)
     ensure_user(referrer)
     DATA["referrals"][key] = {"referrer": referrer, "time": now_text()}
-    transaction(referrer, 5, f"زیرمجموعه معتبر: {uid}")
+    reward = max(0, min(100000, int(bot_settings().get("referral_reward", 5))))
+    if reward:
+        transaction(referrer, reward, f"زیرمجموعه معتبر: {uid}")
     add_log("referral", "", uid, f"referrer={referrer}")
-    try: bot.send_message(referrer, f"🎉 یک زیرمجموعه جدید ثبت شد!\n💎 ۵ الماس دریافت کردی.\nموجودی: {wallet(referrer)}")
+    try: bot.send_message(referrer, f"🎉 یک زیرمجموعه جدید ثبت شد!\n💎 {reward} الماس دریافت کردی.\nموجودی: {wallet(referrer)}")
     except Exception: pass
     save_data()
 
@@ -254,20 +291,26 @@ def referral_text(uid):
         except Exception: pass
     link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}" if BOT_USERNAME else "نام کاربری ربات هنوز در دسترس نیست."
     count = sum(1 for x in DATA["referrals"].values() if int(x.get("referrer", 0)) == int(uid))
-    return f"👥 <b>زیرمجموعه‌گیری</b>\n━━━━━━━━━━━━━━\n🔗 لینک دعوت شما:\n<code>{esc(link)}</code>\n\n👥 زیرمجموعه‌های ثبت‌شده: {count}\n💎 پاداش هر زیرمجموعه جدید: ۵ الماس\n⚠️ دعوت خودت یا ثبت دوباره پاداش نمی‌گیرد."
+    reward = max(0, int(bot_settings().get("referral_reward", 5)))
+    return f"👥 <b>زیرمجموعه‌گیری</b>\n━━━━━━━━━━━━━━\n🔗 لینک دعوت شما:\n<code>{esc(link)}</code>\n\n👥 زیرمجموعه‌های ثبت‌شده: {count}\n💎 پاداش هر زیرمجموعه جدید: {reward} الماس\n⚠️ دعوت خودت یا ثبت دوباره پاداش نمی‌گیرد."
 
 def shop_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for diamonds, days in [(40,15),(80,30),(120,45),(160,60)]:
-        kb.add(types.InlineKeyboardButton(f"💎 {diamonds} الماس — {days} روز امکانات ویژه", callback_data=f"shop:buy:{diamonds}:{days}"))
+    for item in bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]]):
+        try: diamonds, days = int(item[0]), int(item[1])
+        except (TypeError, ValueError, IndexError): continue
+        if diamonds > 0 and days > 0:
+            kb.add(types.InlineKeyboardButton(f"💎 {diamonds} الماس — {days} روز امکانات ویژه", callback_data=f"shop:buy:{diamonds}:{days}"))
     kb.add(types.InlineKeyboardButton("⬅️ منوی کاربر", callback_data="user:home"))
     return kb
 
 def shop_text(uid):
     sub = DATA["subscriptions"].get(str(uid), {})
     expiry = sub.get("expires", "نداری")
+    packages = bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]])
+    package_text = "\n".join(f"💎 {int(x[0])} الماس = {int(x[1])} روز" for x in packages if isinstance(x, (list, tuple)) and len(x) == 2)
     return ("🛒 <b>فروشگاه اشتراک MASIH GUARD</b>\n━━━━━━━━━━━━━━\n"
-            "💎 ۴۰ الماس = ۱۵ روز\n💎 ۸۰ الماس = ۳۰ روز\n💎 ۱۲۰ الماس = ۴۵ روز\n💎 ۱۶۰ الماس = ۶۰ روز\n\n"
+            f"{package_text}\n\n"
             f"💰 موجودی شما: {wallet(uid)} الماس\n⭐ پایان اشتراک فعلی: {esc(expiry)}\n"
             "بسته ویژه پس از خرید به حساب شما افزوده می‌شود.")
 
@@ -289,23 +332,28 @@ def transactions_text(uid):
 def daily_reward(uid):
     u = ensure_user(uid)
     if u.get("last_daily") == today(): return "⏳ پاداش روزانه‌ات را امروز گرفته‌ای؛ فردا دوباره بیا."
+    amount = max(0, min(100000, int(bot_settings().get("daily_reward", 10))))
     u["last_daily"] = today()
-    transaction(uid, 10, "پاداش روزانه")
+    transaction(uid, amount, "پاداش روزانه")
     save_data()
-    return f"🎁 ۱۰ الماس پاداش روزانه گرفتی!\n💎 موجودی: {wallet(uid)}"
+    return f"🎁 {amount} الماس پاداش روزانه گرفتی!\n💎 موجودی: {wallet(uid)}"
 
 def luck_reward(uid):
     u = ensure_user(uid)
     if u.get("last_luck") == today(): return "🍀 شانس روزانه‌ات را امروز امتحان کرده‌ای؛ فردا دوباره بیا."
     u["last_luck"] = today()
-    amount = random.randint(0,5)
+    maximum = max(0, min(1000, int(bot_settings().get("luck_max", 5))))
+    amount = random.randint(0, maximum)
     if amount: transaction(uid, amount, "شانس روزانه")
     else: save_data()
     return f"🍀 نتیجه شانس امروز: {amount} الماس!\n💎 موجودی: {wallet(uid)}"
 
 def buy_subscription(uid, diamonds, days):
-    prices = {40:15, 80:30, 120:45, 160:60}
-    if prices.get(diamonds) != days: return "❌ بسته معتبر نیست."
+    packages = {}
+    for item in bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]]):
+        try: packages[int(item[0])] = int(item[1])
+        except (TypeError, ValueError, IndexError): continue
+    if packages.get(diamonds) != days: return "❌ بسته معتبر نیست."
     if wallet(uid) < diamonds: return "💎 الماس کافی نداری؛ از پاداش روزانه یا زیرمجموعه‌گیری استفاده کن."
     # Charge then extend from the later of now or current expiry.
     from datetime import timedelta
@@ -349,6 +397,7 @@ def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
 
 def process_group_security(message):
     chat,user=message.chat,message.from_user
+    if not DATA.get("settings", {}).get("smart_security", True): return False
     if not user or chat.type not in ("group","supergroup") or is_group_admin(chat.id,user.id): return False
     s=get_group_settings(chat.id); text=get_text(message); key=f"{chat.id}:{user.id}"
     prev=DATA["seen"].get(key,{}); now=time.time(); reason=None
@@ -420,7 +469,10 @@ def welcome_new_members(message):
 def farewell_member(message):
     s=get_group_settings(message.chat.id); member=message.left_chat_member
     if member and s.get("farewell_on"):
-        try: bot.send_message(message.chat.id, "🌙 <b>MASIH GUARD</b>\n━━━━━━━━━━━━━━\n👋 خداحافظ "+esc(member.first_name or "دوست ما")+"\n<i>Powered by MASIH GUARD S1000+</i>")
+        try:
+            custom = s.get("farewell_text", DEFAULT_GROUP["farewell_text"])
+            body = esc(custom).replace("{name}", esc(member.first_name or "دوست ما"))
+            bot.send_message(message.chat.id, "🌙 <b>MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━\n👋 " + body)
         except Exception as e: print("Farewell error:",repr(e))
     if member: add_log("member_left",message.chat.id,member.id,"خروج از گروه")
 
@@ -505,6 +557,19 @@ def handle_show(uid, action):
     elif action=="referral_stats":
         bot.send_message(uid,f"👥 کل زیرمجموعه‌های ثبت‌شده: {len(DATA['referrals'])}\n💎 پاداش هر دعوت معتبر: ۵ الماس")
     elif action=="shop": bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard())
+    elif action=="bot_settings":
+        cfg = bot_settings()
+        packages = "، ".join(f"{int(x[0])} الماس/{int(x[1])} روز" for x in cfg.get("shop_packages", []) if isinstance(x, (list, tuple)) and len(x) == 2)
+        custom_intro = "سفارشی" if str(cfg.get("public_features", "")).strip() else "پیش‌فرض"
+        bot.send_message(uid,
+            "🎛️ <b>تنظیمات عمومی ذخیره‌شده</b>\n━━━━━━━━━━━━━━\n"
+            f"📝 متن معرفی /start: {custom_intro}\n"
+            f"🎁 پاداش روزانه: {cfg.get('daily_reward', 10)} الماس\n"
+            f"🍀 سقف شانس: {cfg.get('luck_max', 5)} الماس\n"
+            f"👥 پاداش دعوت: {cfg.get('referral_reward', 5)} الماس\n"
+            f"🛒 بسته‌ها: {esc(packages)}\n"
+            f"📢 کانال: {esc(cfg.get('channel_url', CHANNEL_URL))}\n"
+            f"🌐 وب‌سایت: {esc(cfg.get('website_url', WEBSITE_URL))}")
 
 # ---------------- Commands and callbacks ----------------
 @bot.message_handler(commands=["start","panel","help"])
@@ -516,9 +581,9 @@ def start_command(message):
         if len(args)>1: apply_referral(uid,args[1].strip())
         if is_owner(uid):
             send_panel(message.chat.id,user_id=uid)
-            bot.send_message(message.chat.id,PUBLIC_FEATURES,reply_markup=public_keyboard())
+            bot.send_message(message.chat.id,public_features_text(),reply_markup=public_keyboard())
         else:
-            bot.send_message(message.chat.id,PUBLIC_FEATURES,reply_markup=public_keyboard())
+            bot.send_message(message.chat.id,public_features_text(),reply_markup=public_keyboard())
         return
     if not is_owner(uid):
         bot.reply_to(message,"پنل مدیریت فقط در اختیار مالک ربات است؛ برای فهرست امکانات به گفت‌وگوی خصوصی ربات برو.")
@@ -548,7 +613,7 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id,"این گزینه را در گفت‌وگوی خصوصی ربات استفاده کن.",show_alert=True); return
             ensure_user(uid,call.from_user.username,call.from_user.first_name)
             if data=="user:home":
-                bot.answer_callback_query(call.id); bot.send_message(uid,PUBLIC_FEATURES,reply_markup=public_keyboard()); return
+                bot.answer_callback_query(call.id); bot.send_message(uid,public_features_text(),reply_markup=public_keyboard()); return
             if data=="user:wallet": bot.answer_callback_query(call.id); bot.send_message(uid,public_wallet(uid)); return
             if data=="user:daily": bot.answer_callback_query(call.id); bot.send_message(uid,daily_reward(uid)); return
             if data=="user:luck": bot.answer_callback_query(call.id); bot.send_message(uid,luck_reward(uid)); return
@@ -599,6 +664,19 @@ def callback_handler(call):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             action=data.split(":",1)[1]
+            global_actions={"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages"}
+            if action in global_actions:
+                WAITING[uid]={"action":action}
+                prompts={
+                    "public_features":"متن معرفی کاربران در /start را بفرست. برای رفتن به خط بعدی از خط جدید استفاده کن؛ این متن به‌صورت ساده نمایش داده می‌شود.",
+                    "channel_url":"لینک کامل کانال با https:// را بفرست.",
+                    "website_url":"لینک کامل وب‌سایت با https:// را بفرست.",
+                    "daily_reward":"تعداد الماس پاداش روزانه را به‌صورت عدد ۰ تا ۱۰۰۰۰۰ بفرست.",
+                    "luck_max":"حداکثر الماس شانس روزانه را به‌صورت عدد ۰ تا ۱۰۰۰ بفرست.",
+                    "referral_reward":"پاداش هر زیرمجموعه معتبر را به‌صورت عدد ۰ تا ۱۰۰۰۰۰ بفرست.",
+                    "shop_packages":"بسته‌ها را این‌طور بفرست: 40=15,80=30,120=45,160=60 (الماس=روز). حداقل یک بسته لازم است."
+                }
+                bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
             group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit"}
             if action in group_actions:
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
@@ -638,10 +716,48 @@ def private_text_handler(message):
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
-    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action"}
+    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
+                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
+        if action in {"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages"}:
+            cfg = bot_settings()
+            if action == "public_features":
+                if text.casefold() in {"پیش‌فرض", "default", "بازنشانی"}:
+                    cfg["public_features"] = ""
+                    message_text = "✅ متن معرفی به حالت پیش‌فرض برگشت."
+                else:
+                    if len(text) > 3500: raise ValueError("متن معرفی حداکثر ۳۵۰۰ نویسه باشد.")
+                    cfg["public_features"] = text
+                    message_text = "✅ متن معرفی /start ذخیره شد."
+            elif action in ("channel_url", "website_url"):
+                if not text.startswith(("https://", "http://")) or len(text) > 500:
+                    raise ValueError("لینک کامل با https:// یا http:// وارد کن.")
+                cfg[action] = text
+                message_text = "✅ لینک ذخیره شد."
+            elif action in ("daily_reward", "luck_max", "referral_reward"):
+                value = int(text)
+                maximum = 1000 if action == "luck_max" else 100000
+                if not 0 <= value <= maximum: raise ValueError(f"عدد باید بین ۰ تا {maximum} باشد.")
+                cfg[action] = value
+                message_text = "✅ مقدار جدید ذخیره شد."
+            else:
+                packages = []
+                for part in text.split(","):
+                    if "=" not in part: raise ValueError("قالب درست: 40=15,80=30")
+                    diamonds, days = (int(v.strip()) for v in part.split("=", 1))
+                    if not (1 <= diamonds <= 1000000 and 1 <= days <= 3650):
+                        raise ValueError("الماس باید ۱ تا ۱۰۰۰۰۰۰ و روز ۱ تا ۳۶۵۰ باشد.")
+                    if any(old[0] == diamonds for old in packages): raise ValueError("مقدار الماس تکراری است.")
+                    packages.append([diamonds, days])
+                if not packages or len(packages) > 10: raise ValueError("از ۱ تا ۱۰ بسته وارد کن.")
+                cfg["shop_packages"] = packages
+                message_text = "✅ بسته‌های اشتراک ذخیره شدند."
+            save_data(); add_log("bot_setting_updated", "", uid, action)
+            WAITING.pop(uid, None)
+            bot.send_message(uid, message_text)
+            return
         if action=="select_group_for_action":
             target=int(text)
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
