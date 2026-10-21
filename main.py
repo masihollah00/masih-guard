@@ -31,7 +31,9 @@ DEFAULT_GROUP = {
     "lock_stickers": False, "lock_voice": False, "lock_video_notes": False,
     "rules": "احترام به اعضا الزامی است.",
     "welcome_text": "سلام {name}، به گروه خوش آمدی!", "farewell_text": "خداحافظ {name}",
-    "auto_replies": {}, "custom_commands": {}, "phone_filter": False
+    "auto_replies": {}, "custom_commands": {}, "phone_filter": False,
+    "smart_security": True, "quiet_hours_on": False, "quiet_start": "23:00", "quiet_end": "07:00",
+    "welcome_image": "", "welcome_delete_seconds": 0
 }
 DEFAULT_DATA = {
     "groups": {}, "warnings": {}, "logs": [], "proxies": [], "customers": {}, "moderation_lists": {}, "message_history": {},
@@ -45,7 +47,8 @@ DEFAULT_DATA = {
         "shop_packages": [[40, 15], [80, 30]]
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
-    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {}
+    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
+    "group_stats": {}, "active_members": {}, "manager_roles": {}
 }
 
 def clone(obj): return json.loads(json.dumps(obj, ensure_ascii=False))
@@ -70,6 +73,9 @@ def load_data():
     data.setdefault("moderation_lists", {})
     data.setdefault("message_history", {})
     data.setdefault("group_requests", {})
+    data.setdefault("group_stats", {})
+    data.setdefault("active_members", {})
+    data.setdefault("manager_roles", {})
     for k, v in DEFAULT_DATA.items():
         if isinstance(v, dict) and not isinstance(data.get(k), dict): data[k] = clone(v)
         if isinstance(v, list) and not isinstance(data.get(k), list): data[k] = clone(v)
@@ -202,7 +208,7 @@ PUBLIC_FEATURES = (
     "├ اخطار، سکوت، رفع سکوت\n├ مسدودسازی، آزادسازی و اخراج\n"
     "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n├ سنجاق پیام و پاک‌سازی پیام‌ها با فرمان مدیر\n\n"
     "⚙️ <b>ابزارهای کاربردی</b>\n"
-    "├ قوانین و پاسخ خودکار\n├ تبدیل متن به فونت‌های فانتزی\n"
+    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۵۰ سبک فونت در گفت‌وگوی خصوصی\n"
     "├ دریافت پروکسی‌های ذخیره‌شده\n├ هوش مصنوعی و تیکت پشتیبانی\n"
     "├ بازی، امتیاز و گزارش فعالیت\n\n"
     "💎 <b>سیستم الماس و اشتراک</b>\n"
@@ -245,14 +251,16 @@ def main_keyboard():
 def section_keyboard(section):
     kb = types.InlineKeyboardMarkup(row_width=1)
     choices = {
-      "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist")],
-      "welcome":[("👋 خوشامدگویی","toggle:welcome_on"),("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text")],
+      "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist"),
+      ("🧠 امنیت هوشمند این گروه","toggle:group_smart_security"),("🌙 ساعت سکوت شبانه","ask:quiet_hours"),("🆔 شناسه و تنظیمات گروه","ask:group_settings")],
+      "welcome":[("👋 خوشامدگویی","toggle:welcome_on"),("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text"),
+      ("🖼 تنظیم تصویر خوشامد","ask:welcome_image"),("🗑 زمان حذف خوشامد","ask:welcome_delete_seconds")],
       "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word"),("🧩 افزودن فرمان اختصاصی","ask:add_custom_command"),("🗑 حذف فرمان اختصاصی","ask:delete_custom_command"),("📣 ارسال اطلاعیه","ask:announcement")],
       "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
       "settings":[("⚙️ تنظیم سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules")],
       "referrals":[("💎 تنظیمات و آمار الماس","show:diamond_stats"),("👥 نظام زیرمجموعه","show:referral_stats"),("🛒 فروشگاه اشتراک","show:shop")],
       "proxy":[("➕ افزودن پروکسی","ask:add_proxy"),("📋 نمایش پروکسی‌ها","show:proxies"),("🗑 حذف پروکسی","ask:delete_proxy")],
-      "stats":[("📊 آمار ربات","show:stats"),("🧾 گزارش فعالیت","show:logs")],
+      "stats":[("📊 آمار ربات","show:stats"),("🧾 گزارش فعالیت","show:logs"),("📈 آمار یک گروه","ask:group_stats"),("📅 گزارش روزانه","show:daily"),("📅 گزارش هفتگی","show:weekly_report"),("🛡 وضعیت امنیت","show:security_status"),("💳 فروش و تمدید اشتراک","show:subscription_sales"),("🔎 جست‌وجوی گزارش‌ها","ask:search_logs")],
       "customers":[("➕ افزودن مشتری","ask:add_customer"),("📋 فهرست مشتریان","show:customers"),("🔎 جست‌وجوی مشتری","ask:find_customer")],
       "tickets":[("🎫 ثبت تیکت","ask:ticket"),("📋 تیکت‌ها","show:tickets")],
       "ai":[("🧠 پرسش از هوش مصنوعی","ask:ai")],
@@ -275,7 +283,8 @@ def section_keyboard(section):
     }
     for label, data in choices.get(section, []):
         kb.add(types.InlineKeyboardButton(label, callback_data=data))
-    kb.add(types.InlineKeyboardButton("⬅️ بازگشت", callback_data="panel:back"))
+    kb.row(types.InlineKeyboardButton("🏠 صفحهٔ اصلی پنل", callback_data="panel:home"),
+           types.InlineKeyboardButton("⬅️ بازگشت", callback_data="panel:back"))
     return kb
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
@@ -296,11 +305,66 @@ def send_panel(chat_id, section="home", message_id=None, user_id=None):
     bot.send_message(chat_id, text, reply_markup=kb)
 
 # ---------------- Font/proxy/referrals/rewards ----------------
+# 50 free font styles. Latin letters use Unicode variants where available;
+# decorative wrappers keep Persian/Arabic text readable too.
+_LATIN = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+def _range_map(upper_start, lower_start=None, upper_count=26, lower_count=26):
+    src, dst = _LATIN, []
+    if upper_start is not None:
+        dst.extend(chr(upper_start+i) for i in range(26))
+    else:
+        dst.extend("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    if lower_start is not None:
+        dst.extend(chr(lower_start+i) for i in range(26))
+    else:
+        dst.extend("abcdefghijklmnopqrstuvwxyz")
+    return str.maketrans(src, "".join(dst))
+
 FONT_MAPS = [
- str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz","𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁𝕂𝕃𝕄ℕ𝕆ℙℚℝ𝕊𝕋𝕌𝕍𝕎𝕏𝕐ℤ𝕒𝕓𝕔𝕕𝕖𝕗𝕘𝕙𝕚𝕛𝕜𝕝𝕞𝕟𝕠𝕡𝕢𝕣𝕤𝕥𝕦𝕧𝕨𝕩𝕪𝕫"),
- str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz","𝘈𝘉𝘊𝘋𝘌𝘍𝘎𝘏𝘐𝘑𝘒𝘓𝘔𝘕𝘖𝘗𝘘𝘙𝘚𝘛𝘜𝘝𝘞𝘟𝘠𝘡𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻"),
- str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz","ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ")]
-def convert_font(text, style=0): return text.translate(FONT_MAPS[style % len(FONT_MAPS)])
+ str.maketrans(_LATIN, "𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁𝕂𝕃𝕄ℕ𝕆ℙℚℝ𝕊𝕋𝕌𝕍𝕎𝕏𝕐ℤ𝕒𝕓𝕔𝕕𝕖𝕗𝕘𝕙𝕚𝕛𝕜𝕝𝕞𝕟𝕠𝕡𝕢𝕣𝕤𝕥𝕦𝕧𝕨𝕩𝕪𝕫"),
+ str.maketrans(_LATIN, "𝘈𝘉𝘊𝘋𝘌𝘍𝘎𝘏𝘐𝘑𝘒𝘓𝘔𝘕𝘖𝘗𝘘𝘙𝘚𝘛𝘜𝘝𝘞𝘟𝘠𝘡𝘢𝘣𝘤𝘥𝘦𝘧𝘨𝘩𝘪𝘫𝘬𝘭𝘮𝘯𝘰𝘱𝘲𝘳𝘴𝘵𝘶𝘷𝘸𝘹𝘺𝘻"),
+ str.maketrans(_LATIN, "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ"),
+ _range_map(0x1D400,0x1D41A), # bold
+ _range_map(0x1D434,0x1D44E), # italic
+ _range_map(0x1D468,0x1D482), # bold italic
+ _range_map(0x1D49C,0x1D4B6), # script
+ _range_map(0x1D4D0,0x1D4EA), # bold script
+ _range_map(0x1D504,0x1D51E), # fraktur
+ _range_map(0x1D56C,0x1D586), # bold fraktur
+ _range_map(0x1D538,0x1D552), # double-struck
+ _range_map(0x1D5A0,0x1D5BA), # sans
+ _range_map(0x1D5D4,0x1D5EE), # sans bold
+ _range_map(0x1D608,0x1D622), # sans italic
+ _range_map(0x1D63C,0x1D656), # sans bold italic
+ _range_map(0x1D670,0x1D68A), # monospace
+ str.maketrans(_LATIN, "ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ"),
+ str.maketrans(_LATIN, "🄰🄱🄲🄳🄴🄵🄶🄷🄸🄹🄺🄻🄼🄽🄾🄿🅀🅁🅂🅃🅄🅅🅆🅇🅈🅉abcdefghijklmnopqrstuvwxyz"),
+]
+FONT_NAMES = [
+ "دوبل‌استراک", "ایتالیک", "فول‌ویدث", "بولد", "ایتالیک کلاسیک", "بولد ایتالیک", "اسکریپت", "اسکریپت بولد", "فرکتور", "فرکتور بولد", "دوبل‌لاین", "سن‌سریف", "سن‌سریف بولد", "سن‌سریف ایتالیک", "سن‌سریف بولد ایتالیک", "مونو‌اسپیس", "دایره‌ای", "کادر مربع"
+]
+FONT_WRAPPERS = [
+ ("✨ ستاره‌ای", "✦ {} ✦"), ("🌟 درخشان", "🌟 {} 🌟"), ("💜 قلبی", "💜 {} 💜"), ("🖤 تیره", "🖤 {} 🖤"),
+ ("⚡ برقی", "⚡ {} ⚡"), ("🔥 آتشی", "🔥 {} 🔥"), ("🌈 رنگین‌کمانی", "🌈 {} 🌈"), ("👑 سلطنتی", "♛ {} ♛"),
+ ("༺ سلطنتی ۲", "༺ {} ༻"), ("꧁ فانتزی", "꧁ {} ꧂"), ("『 کادری ۱ 』", "『 {} 』"), ("【 کادری ۲ 】", "【 {} 】"),
+ ("《 کادری ۳ 》", "《 {} 》"), ("〈 کادری ۴ 〉", "〈 {} 〉"), ("• نقطه‌ای", "• {} •"), ("⋆ ستاره‌ای ۲", "⋆｡ {} ｡⋆"),
+ ("♡ قلب توخالی", "♡ {} ♡"), ("ღ قلبی ۲", "ღ {} ღ"), ("ツ ژاپنی", "ツ {} ツ"), ("メ ژاپنی ۲", "メ {} メ"),
+ ("〆 ژاپنی ۳", "〆 {} 〆"), ("彡 سایه‌ای", "彡 {} 彡"), ("乂 ضربدری", "乂 {} 乂"), ("× ضربدری ۲", "× {} ×"),
+ ("➳ پیکانی", "➳ {} ➳"), ("➤ پیکانی ۲", "➤ {} ➤"), ("☯ نمادین", "☯ {} ☯"), ("☾ ماه", "☾ {} ☽"),
+ ("༄ تزئینی", "༄ {} ༄"), ("𓆩 قاب ۱", "𓆩 {} 𓆪"), ("⫷ قاب ۲", "⫷ {} ⫸"), ("༒ تاریک", "༒ {} ༒")
+]
+def font_variants(text):
+    variants=[]
+    for i, mapping in enumerate(FONT_MAPS):
+        name = FONT_NAMES[i] if i < len(FONT_NAMES) else f"سبک {i+1}"
+        variants.append((name, text.translate(mapping)))
+    for name, wrapper in FONT_WRAPPERS:
+        variants.append((name, wrapper.format(text)))
+    # Ensure precisely 50 styles, preserving order.
+    return variants[:50]
+def convert_font(text, style=0):
+    variants = font_variants(text)
+    return variants[style % len(variants)][1]
 
 def apply_referral(uid, payload):
     if not payload.startswith("ref_"): return
@@ -421,6 +485,39 @@ def safe_delete(message):
     try: bot.delete_message(message.chat.id, message.message_id); return True
     except Exception as e: print("Delete error:", repr(e)); return False
 
+def normalize_security_text(value):
+    """Normalize whitespace, invisible marks and punctuation to catch simple filter evasion."""
+    value = str(value or "").casefold()
+    value = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", value)
+    value = re.sub(r"[\W_]+", "", value, flags=re.UNICODE)
+    return value
+
+def is_quiet_hours(settings, moment=None):
+    if not settings.get("quiet_hours_on"):
+        return False
+    moment = moment or datetime.now()
+    try:
+        start = datetime.strptime(str(settings.get("quiet_start", "23:00")), "%H:%M").time()
+        end = datetime.strptime(str(settings.get("quiet_end", "07:00")), "%H:%M").time()
+    except ValueError:
+        return False
+    current = moment.time()
+    if start == end:
+        return True
+    return (start <= current < end) if start < end else (current >= start or current < end)
+
+def track_group_activity(chat_id, user_id, message_id=None):
+    key = str(chat_id)
+    stats = DATA.setdefault("group_stats", {}).setdefault(key, {"messages": 0, "blocked": 0, "joins": 0, "leaves": 0})
+    stats["messages"] = int(stats.get("messages", 0)) + 1
+    if user_id:
+        members = DATA.setdefault("active_members", {}).setdefault(key, {})
+        members[str(user_id)] = time.time()
+    if message_id is not None:
+        history = DATA.setdefault("message_history", {}).setdefault(key, [])
+        history.append({"message_id": int(message_id), "user_id": int(user_id or 0), "time": time.time()})
+        DATA["message_history"][key] = history[-300:]
+
 def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
     key=f"{chat_id}:{user_id}"
     DATA["warnings"][key]=int(DATA["warnings"].get(key,0))+1
@@ -439,11 +536,14 @@ def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
 
 def process_group_security(message):
     chat,user=message.chat,message.from_user
-    if not DATA.get("settings", {}).get("smart_security", True): return False
     if not user or chat.type not in ("group","supergroup") or is_group_admin(chat.id,user.id): return False
-    s=get_group_settings(chat.id); text=get_text(message); key=f"{chat.id}:{user.id}"
+    s=get_group_settings(chat.id)
+    if not DATA.get("settings", {}).get("smart_security", True) or not s.get("smart_security", True): return False
+    if str(user.id) in {str(x) for x in s.get("whitelist", [])}: return False
+    text=get_text(message); key=f"{chat.id}:{user.id}"
     prev=DATA["seen"].get(key,{}); now=time.time(); reason=None
-    if s.get("media_lock") and has_media(message): reason="ارسال رسانه در حالت قفل رسانه"
+    if is_quiet_hours(s): reason="ارسال پیام در ساعت سکوت شبانه"
+    elif s.get("media_lock") and has_media(message): reason="ارسال رسانه در حالت قفل رسانه"
     elif s.get("anti_forward") and is_forwarded(message): reason="ارسال پیام فورواردشده"
     elif s.get("lock_photos") and getattr(message,"photo",None): reason="ارسال عکس در حالت قفل عکس"
     elif s.get("lock_videos") and getattr(message,"video",None): reason="ارسال فیلم در حالت قفل فیلم"
@@ -455,13 +555,16 @@ def process_group_security(message):
     elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
     elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
-    if not reason and text and s.get("anti_repeat") and prev.get("text")==text and now-prev.get("time",0)<30: reason="پیام تکراری"
+    if not reason and text and s.get("anti_repeat") and normalize_security_text(prev.get("normalized", prev.get("text", ""))) == normalize_security_text(text) and normalize_security_text(text) and now-prev.get("time",0)<30: reason="پیام تکراری یا با تغییرات جزئی"
     times=[t for t in prev.get("times",[]) if now-t<8]; times.append(now)
     if not reason and s.get("anti_spam") and len(times)>=7: reason="ارسال پیام‌های پرتعداد"
-    DATA["seen"][key]={"text":text,"time":now,"times":[] if reason=="ارسال پیام‌های پرتعداد" else times}
+    DATA["seen"][key]={"text":text,"normalized":normalize_security_text(text),"time":now,"times":[] if reason=="ارسال پیام‌های پرتعداد" else times}
     if reason:
         if safe_delete(message):
-            DATA["stats"]["blocked"]+=1; add_log("blocked",chat.id,user.id,reason); warn_member(chat.id,user.id,reason)
+            DATA["stats"]["blocked"]+=1
+            group_stats=DATA.setdefault("group_stats",{}).setdefault(str(chat.id),{"messages":0,"blocked":0,"joins":0,"leaves":0})
+            group_stats["blocked"]=int(group_stats.get("blocked",0))+1
+            add_log("blocked",chat.id,user.id,reason); warn_member(chat.id,user.id,reason)
         return True
     save_data(); return False
 
@@ -479,15 +582,27 @@ def group_message_handler(message):
                 except Exception: pass
             return
         text=get_text(message)
-        # Keep a bounded history so /clean can remove recent messages sent after the bot joined.
-        history=DATA.setdefault("message_history",{}).setdefault(str(message.chat.id),[])
-        history.append({"message_id":message.message_id,"user_id":getattr(message.from_user,"id",0),"time":time.time()})
-        DATA["message_history"][str(message.chat.id)]=history[-200:]
+        # Track group activity and bounded message history for selected statistics/cleanup features.
+        track_group_activity(message.chat.id, getattr(message.from_user,"id",0), message.message_id)
         # Group management shortcuts work only for admins and licensed groups.
-        if text and text.split()[0].split("@",1)[0] in {"/pin","/unpin","/clean","/cleanuser"}:
+        if text and text.split()[0].split("@",1)[0] in {"/pin","/unpin","/clean","/cleanuser","/gstats","/report"}:
             cmd=text.split()[0].split("@",1)[0]
             if not is_group_admin(message.chat.id, message.from_user.id):
                 bot.reply_to(message,"⛔ این فرمان فقط برای مدیران گروه است."); return
+            if cmd=="/gstats":
+                gs=DATA.setdefault("group_stats",{}).get(str(message.chat.id),{})
+                active=len(DATA.setdefault("active_members",{}).get(str(message.chat.id),{}))
+                bot.reply_to(message, f"📊 <b>آمار این گروه</b>\nپیام‌های ثبت‌شده: {int(gs.get('messages',0))}\nپیام‌های مسدودشده: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
+                return
+            if cmd=="/report":
+                if not message.reply_to_message:
+                    bot.reply_to(message,"برای گزارش تخلف، به پیام موردنظر پاسخ بده و /report را بفرست."); return
+                reported=message.reply_to_message
+                detail=f"گزارش توسط {message.from_user.id}; پیام {reported.message_id}; متن={get_text(reported)[:180]}"
+                add_log("user_report",message.chat.id,message.from_user.id,detail)
+                try: bot.send_message(OWNER_ID,"🚨 <b>گزارش تخلف از گروه</b>\nگروه: <code>"+str(message.chat.id)+"</code>\nگزارش‌دهنده: <code>"+str(message.from_user.id)+"</code>\nپیام: <code>"+str(reported.message_id)+"</code>\n"+esc(get_text(reported)[:800]))
+                except Exception as report_error: print("Report owner notice error:",repr(report_error))
+                bot.reply_to(message,"🚨 گزارش برای مالک ربات ارسال شد."); return
             if cmd=="/pin":
                 if not message.reply_to_message: bot.reply_to(message,"برای سنجاق، به پیام موردنظر پاسخ بده و /pin را بفرست."); return
                 bot.pin_chat_message(message.chat.id,message.reply_to_message.message_id)
@@ -569,6 +684,10 @@ def bot_added_or_removed(update):
         if new_status in ("member", "administrator") and old_status in ("left", "kicked") and not is_group_licensed(chat.id):
             DATA.setdefault("group_requests", {})[str(chat.id)] = {"title":getattr(chat,"title", ""),"requested":now_text(),"status":"pending"}; save_data()
             try:
+                bot.send_message(OWNER_ID, "📨 <b>درخواست نصب گروه</b>\nنام: " + esc(getattr(chat,"title", "بدون نام")) + f"\nشناسه: <code>{chat.id}</code>\nبرای فعال‌سازی از پنل بخش «مجوز نصب گروه‌ها» استفاده کن.")
+            except Exception as owner_error:
+                print("Owner group request notice error:", repr(owner_error))
+            try:
                 bot.send_message(chat.id, group_install_message(chat.id, getattr(chat,"title", "این گروه")), reply_markup=support_contact_markup())
             finally:
                 try: bot.leave_chat(chat.id)
@@ -581,7 +700,11 @@ def welcome_new_members(message):
     if not is_group_licensed(message.chat.id): return
     s=get_group_settings(message.chat.id)
     for member in message.new_chat_members:
-        DATA["stats"]["joins"]+=1; add_log("new_member",message.chat.id,member.id,"ورود به گروه")
+        DATA["stats"]["joins"]+=1
+        gs=DATA.setdefault("group_stats",{}).setdefault(str(message.chat.id),{"messages":0,"blocked":0,"joins":0,"leaves":0})
+        gs["joins"]=int(gs.get("joins",0))+1
+        DATA.setdefault("active_members",{}).setdefault(str(message.chat.id),{})[str(member.id)]=time.time()
+        add_log("new_member",message.chat.id,member.id,"ورود به گروه")
         if s.get("welcome_on"):
             try:
                 # Use the approved cyber-style card while preserving a custom welcome message if configured.
@@ -589,11 +712,24 @@ def welcome_new_members(message):
                 if custom and custom != DEFAULT_GROUP["welcome_text"]:
                     text=esc(custom).replace("{name}",f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست عزیز")}</a>')
                     kb=types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
-                    bot.send_message(message.chat.id, welcome_card(message.chat.id,member)+"\n\n"+text, reply_markup=kb)
+                    final_text=welcome_card(message.chat.id,member)+"\n\n"+text
+                    image_url=s.get("welcome_image","")
+                    if image_url:
+                        sent=bot.send_photo(message.chat.id,image_url,caption=welcome_card(message.chat.id,member)[:1000],reply_markup=kb)
+                        bot.send_message(message.chat.id,text[:3500])
+                    else:
+                        sent=bot.send_message(message.chat.id,final_text,reply_markup=kb)
                 else:
                     kb=types.InlineKeyboardMarkup()
                     kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
-                    bot.send_message(message.chat.id,welcome_card(message.chat.id,member),reply_markup=kb)
+                    image_url=s.get("welcome_image","")
+                    sent=bot.send_photo(message.chat.id,image_url,caption=welcome_card(message.chat.id,member)[:1024],reply_markup=kb) if image_url else bot.send_message(message.chat.id,welcome_card(message.chat.id,member),reply_markup=kb)
+                delete_after=int(s.get("welcome_delete_seconds",0) or 0)
+                if delete_after>0:
+                    def _delete_welcome(cid=message.chat.id, mid=sent.message_id):
+                        try: bot.delete_message(cid,mid)
+                        except Exception as delete_error: print("Welcome auto-delete error:",repr(delete_error))
+                    timer=threading.Timer(delete_after,_delete_welcome); timer.daemon=True; timer.start()
             except Exception as e: print("Welcome error:",repr(e))
     save_data()
 
@@ -607,7 +743,12 @@ def farewell_member(message):
             body = esc(custom).replace("{name}", f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست ما")}</a>')
             bot.send_message(message.chat.id, "🌙 <b>MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━\n👋 " + body)
         except Exception as e: print("Farewell error:",repr(e))
-    if member: add_log("member_left",message.chat.id,member.id,"خروج از گروه")
+    if member:
+        gs=DATA.setdefault("group_stats",{}).setdefault(str(message.chat.id),{"messages":0,"blocked":0,"joins":0,"leaves":0})
+        gs["leaves"]=int(gs.get("leaves",0))+1
+        DATA.setdefault("active_members",{}).setdefault(str(message.chat.id),{}).pop(str(member.id),None)
+        add_log("member_left",message.chat.id,member.id,"خروج از گروه")
+        save_data()
 
 @bot.chat_join_request_handler()
 def handle_join_request(request):
@@ -679,8 +820,26 @@ def moderate_member(action,chat_id,user_id):
         return "🔊 محدودیت برداشته شد." if allowed else "🔇 عضو محدود شد."
     raise ValueError("عملیات ناشناخته است.")
 
+def _parse_log_time(value):
+    try: return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").timestamp()
+    except (ValueError, TypeError): return 0
+
 def handle_show(uid, action):
     if action=="stats": bot.send_message(uid,stats_text())
+    elif action=="weekly_report":
+        cutoff=time.time()-7*86400
+        recent=[x for x in DATA.get("logs",[]) if _parse_log_time(x.get("time", "")) >= cutoff]
+        joins=sum(1 for x in recent if x.get("action")=="new_member")
+        leaves=sum(1 for x in recent if x.get("action")=="member_left")
+        warns=sum(1 for x in recent if x.get("action")=="warning")
+        blocked=sum(1 for x in recent if x.get("action")=="blocked")
+        bot.send_message(uid,f"📅 <b>گزارش هفتگی</b>\n━━━━━━━━━━━━━━\nرویدادهای ثبت‌شده: {len(recent)}\nورود اعضا: {joins}\nخروج اعضا: {leaves}\nاخطارها: {warns}\nپیام‌های مسدودشده: {blocked}")
+    elif action=="security_status":
+        bot.send_message(uid, "🛡 <b>وضعیت امنیت</b>\nامنیت هوشمند سراسری: " + ("روشن" if DATA.get("settings",{}).get("smart_security",True) else "خاموش") + f"\nگروه‌های دارای مجوز: {sum(1 for gid in DATA.get('group_licenses',{}) if is_group_licensed(gid))}\nگزارش‌های ذخیره‌شده: {len(DATA.get('logs',[]))}")
+    elif action=="subscription_sales":
+        rows=[x for x in DATA.get("logs",[]) if x.get("action") in {"subscription_bought","group_license_activated","group_license_extended","group_license_revoked"}][-30:]
+        text="\n".join(f"{esc(x.get('time'))} — {esc(x.get('action'))} — {esc(x.get('chat_id'))} — {esc(x.get('detail'))}" for x in reversed(rows))
+        bot.send_message(uid,"💳 <b>فروش و تمدید اشتراک / مجوز</b>\n"+(text or "هنوز تراکنش یا تمدیدی ثبت نشده است."))
     elif action=="status": bot.send_message(uid,f"🚀 <b>{BRAND} {VERSION}</b>\nربات در حال اجراست.\nهوش مصنوعی: {'تنظیم شده' if AI_API_KEY else 'تنظیم نشده'}")
     elif action=="rules":
         p=WAITING.get(uid,{}); bot.send_message(uid,esc(get_group_settings(p.get("chat_id",uid))["rules"]))
@@ -708,7 +867,13 @@ def handle_show(uid, action):
         rows=[f"{esc(x.get('time'))} — {esc(x.get('action'))} — {esc(x.get('detail'))}" for x in DATA["logs"][-20:]]
         bot.send_message(uid,"🧾 <b>آخرین گزارش‌ها</b>\n"+"\n".join(rows) if rows else "گزارشی ثبت نشده است.")
     elif action=="backup": send_backup(uid)
-    elif action=="daily": bot.send_message(uid,stats_text()+"\n\nگزارش از شمارنده‌های ذخیره‌شده ساخته شده است.")
+    elif action=="daily":
+        day=today(); recent=[x for x in DATA.get("logs",[]) if str(x.get("time","" )).startswith(day)]
+        joins=sum(1 for x in recent if x.get("action")=="new_member")
+        leaves=sum(1 for x in recent if x.get("action")=="member_left")
+        warns=sum(1 for x in recent if x.get("action")=="warning")
+        blocked=sum(1 for x in recent if x.get("action")=="blocked")
+        bot.send_message(uid,f"📅 <b>گزارش روزانه — {day}</b>\n━━━━━━━━━━━━━━\nورودها: {joins}\nخروج‌ها: {leaves}\nاخطارها: {warns}\nپیام‌های مسدودشده: {blocked}\nکل پیام‌های ثبت‌شده: {DATA['stats'].get('messages',0)}")
     elif action=="points": bot.send_message(uid,f"🏆 امتیاز شما: {DATA['points'].get(str(uid),0)}")
     elif action=="tickets":
         rows=[(k,v) for k,v in DATA["tickets"].items() if v.get("user_id")==uid or is_owner(uid)]
@@ -782,7 +947,7 @@ def callback_handler(call):
             if data=="user:referrals": bot.answer_callback_query(call.id); bot.send_message(uid,referral_text(uid)); return
             if data=="user:transactions": bot.answer_callback_query(call.id); bot.send_message(uid,transactions_text(uid)); return
             if data=="user:font":
-                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 فونت کاملاً رایگان است. اول متنی را که می‌خواهی تبدیل شود بفرست."); return
+                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
             if data=="user:proxies":
                 bot.answer_callback_query(call.id)
                 bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است."); return
@@ -824,8 +989,8 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             if setting=="smart_security":
                 DATA["settings"]["smart_security"]=not DATA["settings"].get("smart_security",True); save_data()
-                bot.answer_callback_query(call.id,"امنیت هوشمند: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
-            WAITING[uid]={"action":"toggle_group_setting","setting":setting}
+                bot.answer_callback_query(call.id,"امنیت هوشمند سراسری: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
+            WAITING[uid]={"action":"toggle_group_setting","setting":"smart_security" if setting=="group_smart_security" else setting}
             bot.answer_callback_query(call.id)
             bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با ‎-100‎ شروع می‌شود).")
             return
@@ -833,7 +998,7 @@ def callback_handler(call):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             action=data.split(":",1)[1]
-            global_actions={"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement"}
+            global_actions={"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs"}
             if action in global_actions:
                 WAITING[uid]={"action":action}
                 prompts={
@@ -851,15 +1016,18 @@ def callback_handler(call):
                     "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.",
                     "extend_group":"شناسه گروه | تعداد روز را بفرست.",
                     "revoke_group":"شناسه گروه را بفرست.",
-                    "announcement":"شناسه گروه | متن اطلاعیه را بفرست."
+                    "announcement":"شناسه گروه | متن اطلاعیه را بفرست.",
+                    "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).",
+                    "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).",
+                    "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست."
                 }
                 bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
-            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command"}
+            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","quiet_hours","welcome_image","welcome_delete_seconds"}
             if action in group_actions:
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
@@ -890,16 +1058,18 @@ def private_text_handler(message):
         bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است.")
         return
     if text.casefold()=="فونت":
-        WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 فونت کاملاً رایگان است. اول متنی را که می‌خواهی تبدیل شود بفرست."); return
+        WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
     if text.casefold().startswith("فونت "):
         raw=text[5:].strip()
+        if len(raw)>120:
+            bot.send_message(uid,"برای نمایش ۵۰ سبک، متن حداکثر ۱۲۰ نویسه باشد."); return
         WAITING[uid]={"action":"public_font_name","font_text":raw}
-        bot.send_message(uid,"اسم دلخواهی را که می‌خواهی بالای خروجی فونت نمایش داده شود بفرست. فونت رایگان است."); return
+        bot.send_message(uid,"اسم دلخواه را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم."); return
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
-                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement"}
+                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
@@ -958,7 +1128,7 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
         if action=="whitelist":
             target=int(text)
@@ -966,13 +1136,69 @@ def private_text_handler(message):
             values=get_group_settings(target).get("whitelist",[])
             bot.send_message(uid,"📂 <b>کاربران مجاز</b>\n"+("\n".join(f"• <code>{esc(x)}</code>" for x in values) if values else "فهرست خالی است."))
             WAITING.pop(uid,None); return
+        if action=="group_settings":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            cfg=get_group_settings(target)
+            lines=[f"🆔 شناسه گروه: <code>{target}</code>",f"🛡 مجوز نصب: {'فعال' if is_group_licensed(target) else 'غیرفعال'}"]
+            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
+            for key,label in labels.items(): lines.append(f"{label}: {'روشن' if cfg.get(key,False) else 'خاموش'}")
+            lines.append(f"قوانین: {esc(cfg.get('rules',''))[:500]}")
+            bot.send_message(uid,"⚙️ <b>شناسه و تنظیمات گروه</b>\n"+"\n".join(lines))
+            WAITING.pop(uid,None); return
+        if action=="search_logs":
+            query=text.casefold()
+            rows=[]
+            for row in reversed(DATA.get("logs",[])):
+                blob=" ".join(str(row.get(k,"")) for k in ("time","action","chat_id","user_id","detail")).casefold()
+                if query in blob: rows.append(row)
+                if len(rows)>=20: break
+            result="\n\n".join(f"{esc(x.get('time'))} | {esc(x.get('action'))}\nگروه: <code>{esc(x.get('chat_id'))}</code> کاربر: <code>{esc(x.get('user_id'))}</code>\n{esc(x.get('detail'))}" for x in rows)
+            bot.send_message(uid,"🔎 <b>نتیجهٔ جست‌وجوی گزارش‌ها</b>\n"+(result or "موردی پیدا نشد."))
+            WAITING.pop(uid,None); return
+        if action=="group_stats":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            gs=DATA.setdefault("group_stats",{}).get(str(target),{})
+            active=len(DATA.setdefault("active_members",{}).get(str(target),{}))
+            bot.send_message(uid, f"📊 <b>آمار گروه</b> <code>{target}</code>\nپیام‌ها: {int(gs.get('messages',0))}\nمسدودشده‌ها: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
+            WAITING.pop(uid,None); return
+        if action=="quiet_hours":
+            s=get_group_settings(chat_id)
+            if text.casefold() in {"خاموش","off","0"}:
+                s["quiet_hours_on"]=False
+                save_data(); bot.send_message(uid,"🌙 ساعت سکوت شبانه برای این گروه خاموش شد.")
+            else:
+                match=re.fullmatch(r"\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*",text)
+                if not match: raise ValueError("قالب درست: 23:00-07:00")
+                start,end=match.group(1),match.group(2)
+                datetime.strptime(start,"%H:%M"); datetime.strptime(end,"%H:%M")
+                s.update({"quiet_start":start,"quiet_end":end,"quiet_hours_on":True})
+                save_data(); add_log("quiet_hours_set",chat_id,uid,f"{start}-{end}")
+                bot.send_message(uid,f"🌙 ساعت سکوت گروه فعال شد: {start} تا {end}")
+            WAITING.pop(uid,None); return
+        if action=="welcome_image":
+            s=get_group_settings(chat_id)
+            if text.casefold() in {"حذف","پاک","off"}:
+                s["welcome_image"]=""; save_data(); bot.send_message(uid,"🗑 تصویر خوشامد حذف شد.")
+            else:
+                if not text.startswith(("https://","http://")) or len(text)>1000: raise ValueError("لینک مستقیم تصویر باید با https:// شروع شود.")
+                s["welcome_image"]=text; save_data(); bot.send_message(uid,"🖼 لینک تصویر خوشامد ذخیره شد.")
+            WAITING.pop(uid,None); return
+        if action=="welcome_delete_seconds":
+            seconds=int(text)
+            if not 0 <= seconds <= 3600: raise ValueError("زمان باید بین ۰ تا ۳۶۰۰ ثانیه باشد.")
+            get_group_settings(chat_id)["welcome_delete_seconds"]=seconds; save_data()
+            bot.send_message(uid,"🗑 حذف خودکار خوشامد: "+("خاموش" if seconds==0 else f"پس از {seconds} ثانیه"))
+            WAITING.pop(uid,None); return
         if action=="toggle_group_setting":
             target=int(text)
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             setting=pending.get("setting",""); s=get_group_settings(target)
             if not isinstance(s.get(setting),bool): raise ValueError("این تنظیم قابل تغییر نیست.")
             s[setting]=not s[setting]; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
-            bot.send_message(uid,f"✅ تنظیم {setting} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
+            label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
+            bot.send_message(uid,f"✅ {label} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
         elif action in ("activate_group", "extend_group", "revoke_group"):
             parts=[x.strip() for x in text.split("|")]
             target=int(parts[0])
@@ -1045,17 +1271,25 @@ def private_text_handler(message):
                 bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
             except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
         elif action == "public_font_text":
-            if len(text) > 1500: raise ValueError("متن فونت حداکثر ۱۵۰۰ نویسه باشد.")
+            if len(text) > 120: raise ValueError("برای نمایش ۵۰ سبک، متن حداکثر ۱۲۰ نویسه باشد.")
             WAITING[uid]={"action":"public_font_name","font_text":text}
             bot.send_message(uid,"حالا اسم دلخواهت را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم.")
             return
         elif action == "public_font_name":
             raw=pending.get("font_text", "")
             label="" if text.casefold() in {"بدون اسم","ندارد","نه"} else text[:50]
-            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
-            bot.send_message(uid,heading+"<b>سبک ۱</b>\n<code>"+esc(convert_font(raw,0))+"</code>\n\n<b>سبک ۲</b>\n<code>"+esc(convert_font(raw,1))+"</code>\n\n<b>سبک ۳</b>\n<code>"+esc(convert_font(raw,2))+"</code>")
+            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>۵۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
+            variants=font_variants(raw)
+            for start in range(0, 50, 10):
+                lines=[]
+                for idx,(name,value) in enumerate(variants[start:start+10], start=start+1):
+                    lines.append(f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>")
+                bot.send_message(uid, (heading if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,50)})</b>\n━━━━━━━━━━━━━━\n") + "\n\n".join(lines))
         elif action in ("public_font","font"):
-            bot.send_message(uid,"🔤 <b>سه سبک فونت رایگان</b>\n\n"+esc(convert_font(text,0))+"\n\n"+esc(convert_font(text,1))+"\n\n"+esc(convert_font(text,2)))
+            variants=font_variants(text[:120])
+            for start in range(0,50,10):
+                lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10],start=start+1)]
+                bot.send_message(uid, ("🔤 <b>۵۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,50)})</b>\n━━━━━━━━━━━━━━\n")+"\n\n".join(lines))
         elif action in ("welcome_text","farewell_text","rules"):
             s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
         elif action=="auto_reply":
