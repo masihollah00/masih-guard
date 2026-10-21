@@ -27,7 +27,7 @@ from telebot import types
 from flask import Flask, jsonify
 
 BOT_NAME = "مسیح گارد"
-VERSION = "5.2"
+VERSION = "5.3"
 
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
@@ -149,27 +149,27 @@ def reply_safe(message, text, **kwargs):
         return None
 
 def is_link(text):
-    """Detect common URLs, bare domains, and Telegram links in message text."""
+    """Detect URLs with schemes, Telegram links, and common bare domains."""
     if not text:
         return False
-    pattern = (
-        r"(?:https?://|ftp://|www\.)\S+"
-        r"|(?:t\.me|telegram\.me|telegram\.dog)/\S*"
-        r"|(?<![@\w])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    value = str(text).strip()
+    patterns = (
+        r"(?i)\b(?:https?://|ftp://|www\.)[^\s<>]+",
+        r"(?i)(?<![\w@])(?:t\.me|telegram\.me|telegram\.dog)/[^\s<>]*",
+        r"(?i)(?<![\w@])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
         r"(?:com|net|org|io|co|me|info|biz|xyz|app|dev|site|online|ir|de|uk|ru|tr|рф)"
-        r"(?::\d+)?(?:[/?:#][^\s]*)?"
+        r"(?::\d+)?(?:[/?:#][^\s<>]*)?\b"
     )
-    return bool(re.search(pattern, str(text), re.I))
+    return any(re.search(pattern, value) for pattern in patterns)
 
 
 def message_has_link(message, text_value):
-    """Also detect clickable/hidden links represented by Telegram entities."""
+    """Detect visible URLs and clickable links hidden behind text/media captions."""
     if is_link(text_value):
         return True
     for attr in ("entities", "caption_entities"):
         for entity in (getattr(message, attr, None) or []):
-            entity_type = getattr(entity, "type", "")
-            if entity_type in ("url", "text_link"):
+            if getattr(entity, "type", "") in ("url", "text_link"):
                 return True
     return False
 
@@ -324,11 +324,12 @@ def start_command(message):
         "• چت خصوصی: پیام عادی بفرست.\n"
         "• گروه: /ai سؤال خودت\n"
         "• گروه: روی پیام ربات ریپلای کن یا نام ربات را منشن کن.\n\n"
-        "دستورات:\n"
-        "/ping — وضعیت ربات\n/id — آیدی گفتگو و کاربر\n/panel — پنل مدیران گروه\n/rules — راهنما\n/ai سؤال — پرسش از هوش مصنوعی\n"
-        "/warn /warnings /unwarn /mute /unmute /ban /unban /kick /purge\n"
-        "/addbadword /delbadword /badwords\n/antilink_on /antilink_off\n"
-        "/antispam_on /antispam_off\n/welcome_on /welcome_off")
+        "📚 فهرست کامل دستورات مسیح گارد:\n\n"
+        "🔹 عمومی:\n/start یا /help — راهنما\n/ping — بررسی آنلاین بودن\n/id — آیدی کاربر و گروه\n/rules — قوانین فعلی\n/ai سؤال — پرسش از هوش مصنوعی\n\n"
+        "🔹 پنل و ضدلینک/ضداسپم:\n/panel — پنل تنظیمات مدیران\n/antilink_on — روشن کردن ضدلینک\n/antilink_off — خاموش کردن ضدلینک\n/antispam_on — روشن کردن ضداسپم\n/antispam_off — خاموش کردن ضداسپم\n\n"
+        "🔹 خوشامدگویی و فیلتر کلمات:\n/welcome_on — روشن کردن خوشامد\n/welcome_off — خاموش کردن خوشامد\n/addbadword کلمه — افزودن کلمه به فیلتر\n/delbadword کلمه — حذف کلمه از فیلتر\n/badwords — نمایش کلمات فیلتر\n\n"
+        "🔹 مدیریت کاربران (روی پیام کاربر ریپلای کن):\n/warn — اخطار\n/warnings — تعداد اخطارها\n/unwarn — پاک کردن اخطارها\n/mute — سکوت یک‌ساعته\n/unmute — برداشتن سکوت\n/ban — مسدود کردن\n/unban آیدی — رفع مسدودیت با آیدی عددی\n/kick — اخراج\n/purge — پاک‌سازی پیام‌ها\n\n"
+        "⚠️ دستورات مدیریتی فقط برای مدیران گروه است. برای حذف پیام‌ها، به ربات دسترسی Delete messages بده.")
 
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
@@ -656,17 +657,18 @@ def moderate_message(message):
         if settings["anti_link"] and message_has_link(message, text_value):
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                bot.send_message(message.chat.id, "🔗 ارسال لینک در گروه مجاز نیست.")
+                log.info("Anti-link deleted message %s in chat %s", message.message_id, message.chat.id)
                 log_action(message.chat.id, f"Link removed from {message.from_user.id}")
-            except Exception as exc:
-                log.exception("Could not remove link: %s", exc)
                 try:
-                    bot.send_message(
-                        message.chat.id,
-                        "⚠️ لینک شناسایی شد، اما حذف نشد. دسترسی حذف پیام ربات را بررسی کن."
-                    )
+                    bot.send_message(message.chat.id, "🔗 ارسال لینک در گروه مجاز نیست.")
                 except Exception:
-                    pass
+                    log.exception("Link was deleted, but warning message could not be sent.")
+            except Exception:
+                log.exception("ANTI-LINK DELETE FAILED chat=%s message=%s user=%s; check bot admin delete permission", message.chat.id, message.message_id, message.from_user.id)
+                try:
+                    bot.send_message(message.chat.id, "⚠️ ضدلینک لینک را شناسایی کرد ولی نتوانست پیام را حذف کند. دسترسی مدیر ربات به «حذف پیام‌ها» را بررسی کن.")
+                except Exception:
+                    log.exception("Could not send anti-link permission warning.")
             return
         if settings["badword_filter"] and text_value:
             words = get_badwords(message.chat.id)
