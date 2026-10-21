@@ -1,527 +1,663 @@
 # -*- coding: utf-8 -*-
-"""MASIH GUARD v10.0 — Persian Telegram group manager.
-Python 3.11+. Keep secrets in host environment variables.
+"""MASIH GUARD v30.0 | by Masih Hackring
+Telegram group helper/moderation bot.
+
+Environment variables:
+  TELEGRAM_BOT_TOKEN (or BOT_TOKEN) - required
+  OWNER_ID - Telegram numeric owner ID (default: 8620924698)
+  AI_API_KEY - optional OpenRouter API key for AI replies
+  AI_MODEL - optional OpenRouter model (default: openrouter/free)
+  PORT - optional web health-check port (default: 8080)
+
+Install requirements: pyTelegramBotAPI, requests, Flask
 """
-import os, re, json, time, logging, threading, unicodedata
+import os
+import re
+import json
+import time
+import html
+import random
+import logging
+import threading
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime
+
 import requests
 import telebot
 from telebot import types
 from flask import Flask, jsonify
 
+BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
 BOT_NAME = "MASIH GUARD"
-BOT_TITLE = "مسیح گارد"
-VERSION = "10.0"
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_BASE_URL = (os.getenv("AI_BASE_URL") or "https://openrouter.ai/api/v1").strip().rstrip("/")
-AI_MODEL = (os.getenv("AI_MODEL") or "openrouter/free").strip()
+VERSION = "30.0"
+AUTHOR = "Masih Hackring"
+OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
+PORT = int(os.getenv("PORT", "8080"))
 DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
-CHANNEL_URL = "https://t.me/IRHACK_APP33"
-CREATOR_URL = "https://t.me/Ma3ih01"
-try: OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
-except (TypeError, ValueError): OWNER_ID = 0
-try: PORT = int(os.getenv("PORT", "8080"))
-except (TypeError, ValueError): PORT = 8080
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1/chat/completions").strip()
+AI_MODEL = os.getenv("AI_MODEL", "openrouter/free").strip()
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33")
+CREATOR_URL = os.getenv("CREATOR_URL", "https://t.me/Ma3ih01")
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger(BOT_NAME)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+log = logging.getLogger("masih_guard")
+
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing. Set BOT_TOKEN in hosting environment variables.")
-if not AI_BASE_URL.startswith("https://"): AI_BASE_URL = "https://openrouter.ai/api/v1"
-if not AI_MODEL or AI_MODEL.startswith(("http://", "https://")) or AI_MODEL.endswith("/api/v1"): AI_MODEL = "openrouter/free"
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None, threaded=True, num_threads=6)
+    raise RuntimeError("BOT_TOKEN is not set. Add TELEGRAM_BOT_TOKEN or BOT_TOKEN in host environment variables.")
+
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=8)
 app = Flask(__name__)
-lock = threading.RLock()
-spam_history = defaultdict(deque)
-duplicate_history = defaultdict(lambda: deque(maxlen=8))
-font_waiting = {}
-bot_username = ""
 
+DATA_LOCK = threading.RLock()
 DEFAULT_SETTINGS = {
-    "anti_link": True, "anti_spam": True, "anti_duplicate": True,
-    "badword_filter": True, "welcome_enabled": True,
-    "max_messages": 6, "spam_window": 8, "max_warnings": 3,
-    "mute_seconds": 60, "welcome_text": "👋 خوش اومدی {name} عزیز! به گروه خوش اومدی 💜",
-    "captcha_enabled": False, "lock_media": False
+    "anti_link": True,
+    "anti_spam": True,
+    "anti_duplicate": True,
+    "badword_filter": False,
+    "welcome_enabled": True,
+    "captcha_enabled": False,
+    "lock_media": False,
+    "max_messages": 6,
+    "spam_window": 8,
+    "max_warnings": 3,
+    "mute_seconds": 60,
+    "rules": "🌈 قوانین گروه:\n1) احترام به همه\n2) تبلیغات و لینک ممنوع مگر با اجازه مدیر\n3) اسپم و توهین ممنوع\n━━━ 🛡️ MASIH GUARD ━━━",
+    "welcome_text": "سلام {name} به گروه: {group} خوش اومدی! 🍻💜\n🌈 جمع گرم و دوست‌داشتنی گروه منتظرته.\n━━━ 🛡️ MASIH GUARD 〰️ ━━━\n〰️ توسط: Masih Hackring",
+    "bad_words": ["کص", "کسکش", "جنده"],
 }
-def default_data(): return {"badwords": {}, "warnings": {}, "settings": {}, "logs": [], "stats": {}, "subscriptions": {}}
+DATA = {"groups": {}, "warnings": {}, "muted": {}, "banned": {}, "stats": {"messages": 0, "blocked": 0, "welcomes": 0}}
+
+
 def load_data():
+    global DATA
     try:
-        if os.path.isfile(DATA_FILE):
-            with open(DATA_FILE, "r", encoding="utf-8") as f: saved = json.load(f)
-            if isinstance(saved, dict):
-                base = default_data()
-                for k, v in base.items():
-                    if isinstance(saved.get(k), type(v)): base[k] = saved[k]
-                return base
-    except Exception: log.exception("بارگذاری اطلاعات ناموفق بود")
-    return default_data()
-data = load_data()
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                DATA.update(loaded)
+    except Exception as e:
+        log.warning("Could not load data file: %s", e)
+
+
 def save_data():
-    with lock:
-        try:
-            folder = os.path.dirname(os.path.abspath(DATA_FILE)); os.makedirs(folder, exist_ok=True)
+    try:
+        with DATA_LOCK:
             tmp = DATA_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(DATA, f, ensure_ascii=False, indent=2)
             os.replace(tmp, DATA_FILE)
-        except Exception: log.exception("ذخیره اطلاعات ناموفق بود")
-def settings(cid):
-    with lock:
-        s = data["settings"].setdefault(str(cid), {})
-        for k, v in DEFAULT_SETTINGS.items(): s.setdefault(k, v)
-        return s
-def log_action(cid, message):
-    with lock:
-        data["logs"].append({"chat": str(cid), "time": datetime.now(timezone.utc).isoformat(), "text": str(message)[:240]})
-        data["logs"] = data["logs"][-500:]
-    save_data()
-def reply(m, text, **kwargs):
-    try: return bot.reply_to(m, str(text)[:4000], **kwargs)
-    except Exception: log.exception("ارسال پاسخ ناموفق بود"); return None
-def send_text(cid, text, reply_to=None):
-    text = str(text or "پاسخی دریافت نشد.")
-    for pos in range(0, len(text), 3900):
+    except Exception as e:
+        log.warning("Could not save data file: %s", e)
+
+
+def settings(chat_id):
+    key = str(chat_id)
+    with DATA_LOCK:
+        if key not in DATA["groups"]:
+            DATA["groups"][key] = dict(DEFAULT_SETTINGS)
+        else:
+            for k, v in DEFAULT_SETTINGS.items():
+                DATA["groups"][key].setdefault(k, v)
+        return DATA["groups"][key]
+
+
+def display_name(user):
+    name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x).strip()
+    return html.escape(name or getattr(user, "username", None) or str(getattr(user, "id", "کاربر")))
+
+
+def mention(user):
+    return f'<a href="tg://user?id={user.id}">{display_name(user)}</a>'
+
+
+def is_owner(user_id):
+    return int(user_id) == OWNER_ID
+
+
+def is_admin(chat_id, user_id):
+    if is_owner(user_id):
+        return True
+    try:
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
+
+
+def admin_required(message):
+    if not message.from_user:
+        return False
+    if not is_admin(message.chat.id, message.from_user.id):
+        bot.reply_to(message, "⛔ این دستور فقط برای مدیران گروه است.")
+        return False
+    return True
+
+
+def target_from_message(message):
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user
+    parts = (message.text or "").split()
+    if len(parts) >= 2 and parts[1].isdigit():
         try:
-            kw = {"chat_id": cid, "text": text[pos:pos+3900]}
-            if reply_to is not None: kw["reply_to_message_id"] = reply_to
-            bot.send_message(**kw)
-        except Exception: log.exception("ارسال پیام ناموفق بود"); break
-def group_chat(m): return m.chat.type in ("group", "supergroup")
-def owner(uid): return bool(uid and OWNER_ID and uid == OWNER_ID)
-def is_admin(cid, uid):
-    if owner(uid): return True
-    try: return bot.get_chat_member(cid, uid).status in ("administrator", "creator")
-    except Exception: return False
-def is_link(text):
-    if not text: return False
-    pats = [r"(?i)\b(?:https?://|ftp://|www\.)[^\s<>]+", r"(?i)(?<![\w@])(?:t\.me|telegram\.me|telegram\.dog)/[^\s<>]*", r"(?i)(?<![\w@])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|co|me|info|biz|xyz|app|dev|site|online|ir|de|uk|ru|tr)(?::\d+)?(?:[/?:#][^\s<>]*)?"]
-    return any(re.search(p, str(text)) for p in pats)
-def has_link(m, text):
-    if is_link(text): return True
-    return any(getattr(e, "type", "") in ("url", "text_link") for attr in ("entities", "caption_entities") for e in (getattr(m, attr, None) or []))
-def target_user(m):
-    r = getattr(m, "reply_to_message", None)
-    if r and getattr(r, "from_user", None): return r.from_user
-    parts = (m.text or "").split()
-    if len(parts) > 1 and parts[1].lstrip("-").isdigit():
-        try: return bot.get_chat_member(m.chat.id, int(parts[1])).user
-        except Exception: return None
+            return bot.get_chat_member(message.chat.id, int(parts[1])).user
+        except Exception:
+            return None
     return None
-def manageable(m):
-    if not group_chat(m): reply(m, "این دستور را داخل گروه اجرا کن."); return None
-    if not is_admin(m.chat.id, m.from_user.id): reply(m, "⛔ فقط مدیران گروه اجازه دارند."); return None
-    u = target_user(m)
-    if not u: reply(m, "⚠️ روی پیام کاربر ریپلای کن یا آیدی عددی او را بنویس."); return None
-    if u.id in (m.from_user.id, OWNER_ID): reply(m, "⛔ این کاربر قابل هدف‌گیری نیست."); return None
-    try:
-        if bot.get_chat_member(m.chat.id, u.id).status in ("administrator", "creator"):
-            reply(m, "⛔ این دستور روی مدیران گروه اجرا نمی‌شود."); return None
-    except Exception: pass
-    return u
-def badwords(cid):
-    with lock:
-        v = data["badwords"].get(str(cid), [])
-        return list(v) if isinstance(v, list) else []
-def add_warning(cid, uid):
-    key=f"{cid}:{uid}"
-    with lock: data["warnings"][key] = int(data["warnings"].get(key, 0)) + 1; n=data["warnings"][key]
-    save_data(); return n
-def get_warnings(cid, uid):
-    with lock: return int(data["warnings"].get(f"{cid}:{uid}", 0))
 
-@app.get("/")
-def root(): return jsonify({"name": BOT_NAME, "version": VERSION, "status": "running"})
-@app.get("/health")
-def health(): return jsonify({"status": "ok", "bot": BOT_NAME, "version": VERSION})
 
-def ai_answer(question, context=""):
-    if not AI_API_KEY: return "⚠️ هوش مصنوعی تنظیم نشده؛ مقدار AI_API_KEY را در متغیرهای محیطی هاست قرار بده."
-    payload={"model":AI_MODEL,"messages":[{"role":"system","content":"تو دستیار فارسی‌زبان MASIH GUARD هستی. روشن، مودب، دقیق و ایمن جواب بده؛ اگر مطمئن نیستی صادقانه بگو."},{"role":"user","content":f"گفتگو: {context or 'خصوصی'}\nپرسش: {str(question)[:3500]}"}],"temperature":0.7,"max_tokens":900}
-    try:
-        r=requests.post(AI_BASE_URL+"/chat/completions",headers={"Authorization":"Bearer "+AI_API_KEY,"Content-Type":"application/json","HTTP-Referer":"https://github.com/masihollah00/masih-guard","X-OpenRouter-Title":BOT_NAME},json=payload,timeout=(10,45))
-        if not r.ok:
-            log.error("AI API HTTP %s: %s",r.status_code,r.text[:250])
-            return {401:"⚠️ کلید هوش مصنوعی نامعتبر است.",403:"⚠️ دسترسی سرویس رد شد.",429:"⚠️ محدودیت درخواست؛ کمی بعد دوباره امتحان کن.",402:"⚠️ سرویس اعتبار کافی ندارد یا پرداخت لازم است.",400:"⚠️ تنظیمات مدل را بررسی کن.",404:"⚠️ مدل پیدا نشد؛ مقدار AI_MODEL را بررسی کن."}.get(r.status_code,f"⚠️ خطای سرویس هوش مصنوعی: HTTP {r.status_code}")
-        choices=r.json().get("choices") or []; content=(choices[0].get("message") or {}).get("content") if choices else None
-        if isinstance(content,list): content="\n".join(str(x.get("text","")) for x in content if isinstance(x,dict))
-        return content.strip() if isinstance(content,str) and content.strip() else "⚠️ پاسخ هوش مصنوعی خالی بود."
-    except requests.Timeout: return "⚠️ پاسخ هوش مصنوعی طول کشید؛ دوباره امتحان کن."
-    except requests.RequestException: log.exception("AI request failed"); return "⚠️ اتصال به سرویس هوش مصنوعی برقرار نشد."
-    except Exception: log.exception("Unexpected AI error"); return "⚠️ خطای غیرمنتظره در هوش مصنوعی."
-def ai_reply(m, question):
-    status=reply(m,"🤖 دارم فکر می‌کنم...")
-    answer=ai_answer(question,getattr(m.chat,"title","") or "")
-    if status:
-        try: bot.edit_message_text(str(answer)[:4000],m.chat.id,status.message_id); return
-        except Exception: pass
-    send_text(m.chat.id,answer,m.message_id)
-
-# 100 font styles: mathematical Unicode alphabets where available.
-def _map_range(start, upper=True):
-    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if upper else "abcdefghijklmnopqrstuvwxyz"
-    out=[]
-    for ch in chars:
-        cp=ord(ch)
-        if upper and ch in "CHRSZ" and start in (0x1D400,0x1D434,0x1D468,0x1D504,0x1D538,0x1D56C,0x1D5A0,0x1D5D4,0x1D608,0x1D63C,0x1D670):
-            special={0x1D400:{"C":"ℂ","H":"ℍ","N":"ℕ","P":"ℙ","Q":"ℚ","R":"ℝ","Z":"ℤ"},0x1D434:{"B":"ℬ","E":"ℰ","F":"ℱ","H":"ℋ","I":"ℐ","L":"ℒ","M":"ℳ","R":"ℛ"},0x1D468:{"C":"ℭ","H":"ℌ","I":"ℑ","R":"ℜ","Z":"ℨ"},0x1D538:{"C":"ℂ","H":"ℍ","N":"ℕ","P":"ℙ","Q":"ℚ","R":"ℝ","Z":"ℤ"}}
-            if ch in special.get(start,{}): out.append(special[start][ch]); continue
-        out.append(chr(start+cp-ord("A" if upper else "a")))
-    return "".join(out)
-# Each entry is a named conversion; style names are translated for users.
-STYLE_STARTS=[0x1D400,0x1D434,0x1D468,0x1D504,0x1D538,0x1D56C,0x1D5A0,0x1D5D4,0x1D608,0x1D63C,0x1D670]
-STYLE_NAMES=["پررنگ","ایتالیک","پررنگ ایتالیک","گوتیک","دوبل","گوتیک پررنگ","بدون سریف","بدون سریف پررنگ","بدون سریف ایتالیک","بدون سریف پررنگ ایتالیک","تک‌فاصله"]
-def make_style_map(index):
-    start=STYLE_STARTS[index%len(STYLE_STARTS)]
-    upper=_map_range(start,True)
-    # Mathematical lowercase ranges have matching offsets for most alphabets.
-    lower_start=start+0x20
-    if start==0x1D400: lower_start=0x1D41A
-    elif start==0x1D434: lower_start=0x1D44E
-    elif start==0x1D468: lower_start=0x1D482
-    elif start==0x1D504: lower_start=0x1D51E
-    elif start==0x1D538: lower_start=0x1D552
-    elif start==0x1D56C: lower_start=0x1D586
-    elif start==0x1D5A0: lower_start=0x1D5BA
-    elif start==0x1D5D4: lower_start=0x1D5EE
-    elif start==0x1D608: lower_start=0x1D622
-    elif start==0x1D63C: lower_start=0x1D656
-    elif start==0x1D670: lower_start=0x1D68A
-    lower="".join(chr(lower_start+i) for i in range(26))
-    return str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",upper+lower)
-
-def convert_font(text, index):
-    try: return str(text).translate(make_style_map(index))
-    except Exception: return str(text)
-def font_menu(page=0):
-    kb=types.InlineKeyboardMarkup(row_width=2)
-    start=page*10
-    for i in range(start,min(start+10,100)):
-        label=f"{i+1:02d} · {STYLE_NAMES[i%len(STYLE_NAMES)]}"
-        kb.add(types.InlineKeyboardButton(label,callback_data=f"fontstyle:{i}"))
-    nav=[]
-    if page>0: nav.append(types.InlineKeyboardButton("⬅️ قبلی",callback_data=f"fontpage:{page-1}"))
-    if page<9: nav.append(types.InlineKeyboardButton("بعدی ➡️",callback_data=f"fontpage:{page+1}"))
-    if nav: kb.row(*nav)
-    kb.add(types.InlineKeyboardButton("🔙 منوی اصلی",callback_data="menu:home"))
+def main_panel():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    # Telegram controls actual button colors; rainbow emojis provide the seven-color look.
+    kb.add(
+        types.InlineKeyboardButton("🔴 مدیریت", callback_data="panel:manage"),
+        types.InlineKeyboardButton("🟠 امنیت", callback_data="panel:security"),
+        types.InlineKeyboardButton("🟡 قوانین", callback_data="panel:rules"),
+        types.InlineKeyboardButton("🟢 راهنما", callback_data="panel:help"),
+        types.InlineKeyboardButton("🔵 وضعیت", callback_data="panel:status"),
+        types.InlineKeyboardButton("🟣 سازنده", callback_data="panel:creator"),
+        types.InlineKeyboardButton("🌈 پنل هفت‌رنگ", callback_data="panel:rainbow"),
+        types.InlineKeyboardButton("📢 کانال", url=CHANNEL_URL),
+    )
     return kb
 
-def home_markup():
-    k=types.InlineKeyboardMarkup(row_width=2)
-    k.add(types.InlineKeyboardButton("🛡 مدیریت گروه",callback_data="menu:manage"),types.InlineKeyboardButton("✨ قابلیت‌ها",callback_data="menu:features"))
-    k.add(types.InlineKeyboardButton("🖋 فونت‌ساز ۱۰۰تایی",callback_data="menu:fonts"),types.InlineKeyboardButton("🌐 پروکسی",callback_data="menu:proxy"))
-    k.add(types.InlineKeyboardButton("🤖 هوش مصنوعی",callback_data="menu:ai"),types.InlineKeyboardButton("📊 آمار",callback_data="menu:stats"))
-    k.add(types.InlineKeyboardButton("👑 درباره سازنده",callback_data="menu:team"),types.InlineKeyboardButton("💎 ربات اشتراکی",callback_data="menu:shared"))
-    k.add(types.InlineKeyboardButton("📢 کانال",url=CHANNEL_URL),types.InlineKeyboardButton("👨‍💻 سازنده",url=CREATOR_URL))
-    return k
-def back_markup():
-    k=types.InlineKeyboardMarkup(); k.add(types.InlineKeyboardButton("🔙 بازگشت به منوی اصلی",callback_data="menu:home")); return k
-def panel_markup(cid):
-    s=settings(cid); k=types.InlineKeyboardMarkup(row_width=2)
-    items=[("anti_link","🔗 ضدلینک"),("anti_spam","🚫 ضداسپم"),("anti_duplicate","🔁 ضدتکرار"),("badword_filter","🤬 فیلتر کلمات"),("welcome_enabled","👋 خوشامدگویی"),("lock_media","🖼 قفل رسانه")]
-    for key,label in items: k.add(types.InlineKeyboardButton(f"{label} {'🟢' if s[key] else '🔴'}",callback_data="toggle:"+key))
-    k.add(types.InlineKeyboardButton("📊 آمار گروه",callback_data="menu:stats"),types.InlineKeyboardButton("🔙 منوی اصلی",callback_data="menu:home"))
-    return k
 
-@bot.message_handler(commands=["start","help"])
-def start(m):
-    text=(f"⚡ {BOT_TITLE} | {BOT_NAME} نسخه {VERSION}\n\n🛡 مدیریت گروه، فونت‌ساز ۱۰۰ سبکی، هوش مصنوعی و ابزارهای کاربردی\n\nبرای بازکردن پنل بنویس: پنل\nبرای فونت‌ها بنویس: فونت masih\nبرای فهرست پروکسی بنویس: پروکسی\n\nدستورات: /panel /ping /id /rules /ai /font /proxy /proxies /stats")
-    bot.send_message(m.chat.id,text,reply_markup=home_markup())
-@bot.callback_query_handler(func=lambda c: bool(c.data and c.data.startswith("menu:")))
-def menu_callback(c):
-    try:
-        key=c.data.split(":",1)[1]
-        pages={
-          "home":(f"⚡ {BOT_TITLE} | {BOT_NAME} نسخه {VERSION}\nهمه ابزارها از این منو در دسترس‌اند.",home_markup()),
-          "features":("✨ قابلیت‌ها\n• ضدلینک، ضداسپم و ضدتکرار\n• فیلتر کلمات و خوشامدگویی\n• اخطار، سکوت، مسدودسازی، اخراج و پاک‌سازی\n• فونت‌ساز با ۱۰۰ سبک\n• دستیار هوش مصنوعی فارسی\n• آمار و تنظیمات گروه",back_markup()),
-          "manage":("🛡 مدیریت گروه\nربات را مدیر گروه کن و «پنل» را بنویس.\nدستورها: /warn /warnings /unwarn /mute /unmute /ban /unban /kick /purge",back_markup()),
-          "fonts":("🖋 فونت‌ساز ۱۰۰ سبکی\nبرای شروع بنویس: فونت masih\nیا دستور /font شماره سبک متن را استفاده کن؛ مثلاً /font 1 Hello Masih\nبسیاری از سبک‌ها حروف انگلیسی را تغییر می‌دهند و حروف فارسی معمولاً بدون تغییر می‌مانند.",font_menu(0)),
-          "proxy":("🌐 دریافت پروکسی\nبنویس «پروکسی» یا /proxies تا فهرست عمومی بررسی شود. فعال‌بودن و امنیت لینک‌ها تضمین‌شده نیست.",back_markup()),
-          "ai":("🤖 هوش مصنوعی\nدر گفت‌وگوی خصوصی پیام بفرست یا /ai سؤال را بنویس. باید AI_API_KEY در تنظیمات هاست وارد شده باشد.",back_markup()),
-          "team":("👑 درباره سازنده\nساخت ربات تلگرام، وب‌سایت و ابزارهای کاربردی.\nسازنده: @Ma3ih01",back_markup()),
-          "shared":("💎 ربات اشتراکی\nقابلیت‌های مدیریت و ابزارهای کاربردی در یک ربات. این نسخه پرداخت خودکار یا اشتراک پولی فعال ندارد مگر اینکه جداگانه راه‌اندازی و تأیید شود.",back_markup()),
-          "stats":("📊 آمار گروه\nبرای مشاهده آمار گروه، دستور /stats را به‌عنوان مدیر داخل گروه اجرا کن.",back_markup())}
-        if key=="fonts":
-            bot.edit_message_text(pages[key][0],c.message.chat.id,c.message.message_id,reply_markup=pages[key][1])
+def panel_text():
+    return (
+        "🌈 <b>MASIH GUARD | نسخه 30.0</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🛡️ ربات مدیریت و امنیت گروه\n"
+        "🔴 مدیریت  🟠 امنیت  🟡 قوانین\n"
+        "🟢 راهنما  🔵 وضعیت  🟣 سازنده\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "✦ سازنده: <b>Masih Hackring</b>\n"
+        "برای فونت هر اسم یا متنی، بنویس: <code>فونت اسم دلخواه</code>\n"
+        "برای پروکسی، بنویس: <code>پروکسی</code>"
+    )
+
+
+def send_long(chat_id, text, reply_to=None):
+    # Telegram text messages have a 4096-character limit; split on line boundaries.
+    chunks, current = [], ""
+    for line in text.splitlines(True):
+        if len(current) + len(line) > 3900:
+            if current:
+                chunks.append(current)
+            current = ""
+        current += line
+    if current:
+        chunks.append(current)
+    for i, chunk in enumerate(chunks):
+        bot.send_message(chat_id, chunk, reply_to_message_id=reply_to if i == 0 else None, disable_web_page_preview=True)
+
+# ---------- 100 font styles ----------
+_MATH_UPPER = {
+    "bold": (0x1D400, 0x1D41A), "italic": (0x1D434, 0x1D44E),
+    "bold_italic": (0x1D468, 0x1D482), "script": (0x1D49C, 0x1D4B6),
+    "bold_script": (0x1D4D0, 0x1D4EA), "fraktur": (0x1D504, 0x1D51E),
+    "double": (0x1D538, 0x1D552), "bold_fraktur": (0x1D56C, 0x1D586),
+    "sans": (0x1D5A0, 0x1D5BA), "sans_bold": (0x1D5D4, 0x1D5EE),
+    "sans_italic": (0x1D608, 0x1D622), "sans_bold_italic": (0x1D63C, 0x1D656),
+    "mono": (0x1D670, 0x1D68A),
+}
+_MATH_LOWER = {
+    "bold": (0x1D41A, 0x1D434), "italic": (0x1D44E, 0x1D468),
+    "bold_italic": (0x1D482, 0x1D49C), "script": (0x1D4B6, 0x1D4D0),
+    "bold_script": (0x1D4EA, 0x1D504), "fraktur": (0x1D51E, 0x1D538),
+    "double": (0x1D552, 0x1D56C), "bold_fraktur": (0x1D586, 0x1D5A0),
+    "sans": (0x1D5BA, 0x1D5D4), "sans_bold": (0x1D5EE, 0x1D608),
+    "sans_italic": (0x1D622, 0x1D63C), "sans_bold_italic": (0x1D656, 0x1D670),
+    "mono": (0x1D68A, 0x1D6A4),
+}
+_STYLE_NAMES = ["Bold", "Italic", "Bold Italic", "Script", "Bold Script", "Fraktur", "Double-struck", "Bold Fraktur", "Sans", "Sans Bold", "Sans Italic", "Sans Bold Italic", "Monospace"]
+
+def stylize_latin(text, style):
+    upper = _MATH_UPPER.get(style)
+    lower = _MATH_LOWER.get(style)
+    out = []
+    for ch in text:
+        if "A" <= ch <= "Z" and upper:
+            cp = upper[0] + ord(ch) - ord("A")
+            # Unicode has a few historical holes in script/fraktur alphabets; fallback to original.
+            try: out.append(chr(cp))
+            except ValueError: out.append(ch)
+        elif "a" <= ch <= "z" and lower:
+            cp = lower[0] + ord(ch) - ord("a")
+            try: out.append(chr(cp))
+            except ValueError: out.append(ch)
+        elif "0" <= ch <= "9" and style == "double":
+            out.append(chr(0x1D7D8 + ord(ch) - ord("0")))
+        elif "0" <= ch <= "9" and style in ("sans", "sans_bold", "mono"):
+            base = {"sans": 0x1D7E2, "sans_bold": 0x1D7EC, "mono": 0x1D7F6}[style]
+            out.append(chr(base + ord(ch) - ord("0")))
         else:
-            text,markup=pages.get(key,pages["home"]); bot.edit_message_text(text,c.message.chat.id,c.message.message_id,reply_markup=markup)
-        bot.answer_callback_query(c.id)
-    except Exception:
-        log.exception("Menu callback failed")
-        try: bot.answer_callback_query(c.id,"بازکردن منو ناموفق بود.")
-        except Exception: pass
-@bot.callback_query_handler(func=lambda c: bool(c.data and c.data.startswith("toggle:")))
-def toggle_callback(c):
-    try:
-        if not c.message:return
-        cid=c.message.chat.id
-        if not is_admin(cid,c.from_user.id): bot.answer_callback_query(c.id,"فقط مدیر گروه اجازه دارد.",show_alert=True); return
-        key=c.data.split(":",1)[1]
-        if key not in ("anti_link","anti_spam","anti_duplicate","badword_filter","welcome_enabled","lock_media"): bot.answer_callback_query(c.id,"تنظیم نامعتبر"); return
-        s=settings(cid); s[key]=not bool(s[key]); save_data(); bot.answer_callback_query(c.id,"تنظیم ذخیره شد.")
-        bot.edit_message_reply_markup(cid,c.message.message_id,reply_markup=panel_markup(cid))
-    except Exception: log.exception("Toggle callback failed")
-@bot.callback_query_handler(func=lambda c: bool(c.data and c.data.startswith("fontpage:")))
-def font_page_cb(c):
-    try:
-        page=max(0,min(9,int(c.data.split(":")[1])))
-        bot.edit_message_reply_markup(c.message.chat.id,c.message.message_id,reply_markup=font_menu(page)); bot.answer_callback_query(c.id,f"صفحه {page+1} از ۱۰")
-    except Exception: bot.answer_callback_query(c.id,"رفتن به صفحه ناموفق بود.")
-@bot.callback_query_handler(func=lambda c: bool(c.data and c.data.startswith("fontstyle:")))
-def font_style_cb(c):
-    try:
-        index=max(0,min(99,int(c.data.split(":")[1])))
-        font_waiting[c.from_user.id]=index
-        bot.answer_callback_query(c.id,"سبک انتخاب شد؛ حالا متن را بفرست.")
-        bot.send_message(c.from_user.id,f"🖋 سبک شماره {index+1} انتخاب شد. متن انگلیسی‌ات را همین‌جا بفرست تا تبدیل کنم.")
-    except Exception: log.exception("Font style callback failed")
-@bot.message_handler(func=lambda m: bool(m.text) and m.text.strip().lower() in ("پنل","پنل مدیریت","/panel@"+(bot_username or "never")))
-def panel_text(m):
-    if not group_chat(m):
-        if owner(m.from_user.id): bot.send_message(m.chat.id,"👑 پنل مالک MASIH GUARD",reply_markup=home_markup())
-        else: reply(m,"⚙️ پنل مدیریت گروه را داخل گروه و با دسترسی مدیر باز کن.")
-        return
-    if not is_admin(m.chat.id,m.from_user.id): reply(m,"⛔ پنل فقط برای مدیران گروه است."); return
-    bot.send_message(m.chat.id,"✨ پنل مدیریت MASIH GUARD v10.0\n🟢 روشن | 🔴 خاموش",reply_markup=panel_markup(m.chat.id))
-@bot.message_handler(commands=["panel"])
-def panel(m):
-    if not group_chat(m):
-        if owner(m.from_user.id): bot.send_message(m.chat.id,"👑 پنل مالک MASIH GUARD",reply_markup=home_markup())
-        else: reply(m,"⚙️ پنل مدیریت را داخل گروه باز کن.")
-        return
-    if not is_admin(m.chat.id,m.from_user.id): reply(m,"⛔ پنل فقط برای مدیران گروه است."); return
-    bot.send_message(m.chat.id,"✨ پنل مدیریت MASIH GUARD v10.0\n🟢 روشن | 🔴 خاموش",reply_markup=panel_markup(m.chat.id))
-@bot.message_handler(commands=["ping"])
-def ping(m): reply(m,f"✅ {BOT_NAME} آنلاین است | نسخه {VERSION}")
-@bot.message_handler(commands=["id"])
-def ids(m): reply(m,f"👤 شناسه شما: {m.from_user.id}\n💬 شناسه گفتگو: {m.chat.id}")
-@bot.message_handler(commands=["rules"])
-def rules(m): reply(m,"📘 قوانین پیشنهادی: احترام، پرهیز از اسپم و لینک ناخواسته، رعایت قوانین تلگرام و گروه.")
-@bot.message_handler(commands=["ai"])
-def ai_cmd(m):
-    q=(m.text or "").partition(" ")[2].strip()
-    if not q and m.reply_to_message:q=(m.reply_to_message.text or m.reply_to_message.caption or "").strip()
-    if not q:reply(m,"نمونه: /ai درباره فضا توضیح بده");return
-    ai_reply(m,q)
-@bot.message_handler(commands=["font"])
-def font_cmd(m):
-    parts=(m.text or "").split(maxsplit=2)
-    if len(parts)<3: reply(m,"استفاده: /font شماره_سبک متن\nمثال: /font 1 Hello Masih\nیا بنویس «فونت masih» و از منو انتخاب کن.");return
-    try: idx=int(parts[1])-1
-    except ValueError: idx=0
-    if idx<0 or idx>99:reply(m,"شماره سبک باید بین ۱ تا ۱۰۰ باشد.");return
-    reply(m,convert_font(parts[2],idx))
-@bot.message_handler(commands=["proxy"])
-def proxy_help(m): reply(m,"🌐 برای دریافت فهرست عمومی، بنویس «پروکسی» یا از /proxies استفاده کن. امنیت و فعال‌بودن لینک‌ها تضمین‌شده نیست.")
-@bot.message_handler(commands=["proxies"])
-def proxies(m):
-    status=reply(m,"🌐 در حال دریافت فهرست پروکسی…")
-    sources=["https://raw.githubusercontent.com/ALIILAPRO/MTProtoProxy/main/proxy.txt","https://raw.githubusercontent.com/ALIILAPRO/MTProtoProxy/master/proxy.txt"]
-    found=[]
+            out.append(ch)
+    return "".join(out)
+
+
+def font_variants(text):
+    styles = list(_MATH_UPPER.keys())
+    result = []
+    # 13 mathematical alphabet styles
+    for style in styles:
+        result.append((style.replace("_", " ").title(), stylize_latin(text, style)))
+    # Decorative variants that preserve the supplied text and work with Persian too.
+    wrappers = [
+        ("Neon", "✨ {x} ✨"), ("Stars", "★彡 {x} 彡★"), ("Crown", "♛ {x} ♛"),
+        ("Diamond", "◇◆ {x} ◆◇"), ("Fire", "🔥 {x} 🔥"), ("Purple", "💜 {x} 💜"),
+        ("Blue", "💙 {x} 💙"), ("Green", "💚 {x} 💚"), ("Red", "❤️ {x} ❤️"),
+        ("Gold", "👑 {x} 👑"), ("Cyber", "⟦ {x} ⟧"), ("Box", "『 {x} 』"),
+        ("Wave", "〰️ {x} 〰️"), ("Spark", "⋆｡°✩ {x} ✩°｡⋆"), ("Arrow", "➤ {x} ◀"),
+        ("Moon", "☾ {x} ☽"), ("Flower", "❀ {x} ❀"), ("Heart", "ღ {x} ღ"),
+        ("Music", "♫ {x} ♫"), ("Royal", "༺ {x} ༻"), ("Frame", "【 {x} 】"),
+        ("Square", "▣ {x} ▣"), ("Circle", "◉ {x} ◉"), ("Cross", "✞ {x} ✞"),
+        ("Butterfly", "ʚ♡ɞ {x} ʚ♡ɞ"), ("Cloud", "☁ {x} ☁"), ("Lightning", "ϟ {x} ϟ"),
+        ("Pixel", "▓▒░ {x} ░▒▓"), ("Glitch", "≋ {x} ≋"), ("Minimal", "• {x} •"),
+        ("Slash", "╱ {x} ╲"), ("Bracket", "⟪ {x} ⟫"), ("Flame", "♨ {x} ♨"),
+        ("Gem", "💎 {x} 💎"), ("Angel", "୨୧ {x} ୨୧"), ("Devil", "𖤐 {x} 𖤐"),
+        ("Leaf", "❦ {x} ❦"), ("Ribbon", "୨୧・{x}・୨୧"), ("Neon 2", "⫷ {x} ⫸"),
+        ("Cyber 2", "⌁ {x} ⌁"), ("Royal 2", "♔ {x} ♔"), ("Stars 2", "✦✧ {x} ✧✦"),
+        ("Cute", "૮₍ ˶ᵔ ᵕ ᵔ˶ ₎ა {x}"), ("Retro", "《 {x} 》"), ("Tech", "< {x} />"),
+        ("Matrix", "▌│█║▌║▌ {x} ▌║▌║█│▌"), ("Line", "━━ {x} ━━"), ("Dots", "··· {x} ···"),
+        ("Wave 2", "≈≈ {x} ≈≈"), ("Crown 2", "♕ {x} ♕"), ("Heart 2", "♡ {x} ♡"),
+        ("Flower 2", "✿ {x} ✿"), ("Sparkle 2", "✧ {x} ✧"), ("Magic", "☄ {x} ☄"),
+        ("Badge", "『★』{x}『★』"), ("Shield", "🛡️ {x} 🛡️"), ("Rainbow", "🌈 {x} 🌈"),
+        ("Purple 2", "🟣〔{x}〕🟣"), ("Blue 2", "🔵〔{x}〕🔵"), ("Green 2", "🟢〔{x}〕🟢"),
+        ("Yellow", "🟡〔{x}〕🟡"), ("Orange", "🟠〔{x}〕🟠"), ("Red 2", "🔴〔{x}〕🔴"),
+        ("Square 2", "▰ {x} ▰"), ("Triangle", "△ {x} △"), ("Diamond 2", "◈ {x} ◈"),
+        ("Vintage", "༒ {x} ༒"), ("Fancy", "꧁ {x} ꧂"), ("Fancy 2", "꧁༺ {x} ༻꧂"),
+        ("Mystic", "𓆩 {x} 𓆪"), ("Space", "⭒ {x} ⭒"), ("Comet", "☄︎ {x} ☄︎"),
+        ("Wave 3", "〜 {x} 〜"), ("Bracket 2", "〖 {x} 〗"), ("Frame 2", "╭─ {x} ─╮"),
+        ("Frame 3", "╰─ {x} ─╯"), ("Star 3", "✪ {x} ✪"), ("Music 2", "♪ {x} ♪"),
+        ("Love", "💞 {x} 💞"), ("Butterfly 2", "🦋 {x} 🦋"), ("Fox", "ᵔᴥᵔ {x}"),
+        ("Cat", "ฅ^•ﻌ•^ฅ {x}"), ("Bear", "ʕ•ᴥ•ʔ {x}"), ("Sun", "☀ {x} ☀"),
+        ("Moon 2", "☽⋆ {x} ⋆☾"), ("Cloud 2", "☁︎ {x} ☁︎"), ("Wave 4", "≋≋ {x} ≋≋"),
+        ("Hash", "# {x} #"), ("Percent", "% {x} %"), ("At", "@ {x} @"),
+        ("Dollar", "$ {x} $"), ("Ampersand", "& {x} &"), ("Plus", "✚ {x} ✚"),
+        ("Infinity", "∞ {x} ∞"), ("Omega", "Ω {x} Ω"), ("Lambda", "Λ {x} Λ"),
+        ("Terminal", "root@masih:~$ {x}"), ("Code", "[ {x} ]"), ("System", ":: {x} ::"),
+        ("Glitch 2", "̷{x}̷"), ("Final", "༺🌈 {x} 🌈༻"),
+    ]
+    for name, fmt in wrappers:
+        result.append((name, fmt.format(x=text)))
+    # Always return exactly 100 copyable lines.
+    return result[:100]
+
+
+def handle_font_command(message, raw_text=None):
+    text = (raw_text if raw_text is not None else (message.text or "")).strip()
+    match = re.match(r"^(?:فونت|font)(?:\s+(.+))?$", text, flags=re.I | re.S)
+    if not match or not match.group(1):
+        bot.reply_to(message, "✍️ اسم یا متن رو بعد از کلمه فونت بنویس.\nمثال: <code>فونت Masih Hackring</code>")
+        return True
+    supplied = match.group(1).strip()
+    if len(supplied) > 120:
+        bot.reply_to(message, "⚠️ متن برای ساخت ۱۰۰ مدل خیلی طولانیه؛ لطفاً کوتاه‌ترش کن (حداکثر ۱۲۰ کاراکتر).")
+        return True
+    variants = font_variants(supplied)
+    output = [f"🌈 <b>۱۰۰ مدل فونت برای:</b> {html.escape(supplied)}\n━━━━━━━━━━━━━━━━━━"]
+    for i, (style, value) in enumerate(variants, 1):
+        output.append(f"{i:02d}. {html.escape(value)}")
+    output.append("\n✦ سازنده: <b>Masih Hackring</b>")
+    send_long(message.chat.id, "\n".join(output), message.message_id)
+    return True
+
+# ---------- public Telegram proxy links ----------
+def get_proxy_links():
+    sources = [
+        "https://raw.githubusercontent.com/ALIILAPRO/Telegram-Proxy/main/proxy.txt",
+        "https://raw.githubusercontent.com/TelegramMessenger/Telegram-iOS/master/README.md",
+    ]
+    found = []
+    patterns = [r"https?://t\.me/(?:proxy|socks)\?[A-Za-z0-9_=%&.+-]+", r"tg://proxy\?[A-Za-z0-9_=%&.+-]+"]
     for url in sources:
         try:
-            r=requests.get(url,timeout=10); r.raise_for_status()
-            found.extend(re.findall(r"https?://t\.me/proxy\?[^\s<>\"']+",r.text))
-            if found:break
-        except Exception: log.warning("دریافت منبع پروکسی ناموفق بود: %s",url)
-    unique=list(dict.fromkeys(found))[:10]
-    out=("🌐 لینک‌های عمومی پیدا شده (فعال‌بودن بررسی نشده):\n\n"+"\n".join(f"{i+1}. {u}" for i,u in enumerate(unique))+"\n\n⚠️ از منابع ناشناس برای حساب‌های حساس استفاده نکن.") if unique else "⚠️ دریافت فهرست پروکسی ممکن نشد؛ اتصال هاست یا منبع عمومی را بررسی کن."
-    try:
-        if status:bot.edit_message_text(out[:4000],m.chat.id,status.message_id)
-        else:send_text(m.chat.id,out)
-    except Exception:send_text(m.chat.id,out)
-@bot.message_handler(commands=["stats"])
-def stats(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ این دستور فقط برای مدیر گروه است.");return
-    with lock:
-        logs=[x for x in data["logs"] if x.get("chat")==str(m.chat.id)]
-        warned=sum(1 for k,v in data["warnings"].items() if k.startswith(str(m.chat.id)+":") and int(v or 0)>0)
-        count=int(data["stats"].get(str(m.chat.id),0))
-    s=settings(m.chat.id); active=[label for key,label in [("anti_link","ضدلینک"),("anti_spam","ضداسپم"),("anti_duplicate","ضدتکرار"),("badword_filter","فیلتر کلمات"),("welcome_enabled","خوشامدگویی")] if s[key]]
-    reply(m,f"📊 آمار MASIH GUARD\nپیام‌های دیده‌شده از شروع ذخیره آمار: {count}\nگزارش‌های ثبت‌شده: {len(logs)}\nکاربران دارای اخطار: {warned}\nقابلیت‌های روشن: {', '.join(active) if active else 'هیچ‌کدام'}")
-@bot.message_handler(commands=["warn"])
-def warn(m):
-    u=manageable(m)
-    if not u:return
-    n=add_warning(m.chat.id,u.id); limit=int(settings(m.chat.id)["max_warnings"])
-    reply(m,f"⚠️ اخطار ثبت شد: {n}/{limit}");log_action(m.chat.id,f"اخطار برای {u.id}: {n}")
-    if n>=limit:
-        try:bot.ban_chat_member(m.chat.id,u.id);reply(m,"⛔ سقف اخطار رسید؛ کاربر مسدود شد.");log_action(m.chat.id,f"مسدودسازی خودکار {u.id}")
-        except Exception:log.exception("Auto-ban failed");reply(m,"⚠️ مسدودسازی خودکار ناموفق بود؛ مجوزهای ربات را بررسی کن.")
-@bot.message_handler(commands=["warnings"])
-def warnings_cmd(m):
-    u=target_user(m);uid=u.id if u else m.from_user.id;reply(m,f"⚠️ تعداد اخطارها: {get_warnings(m.chat.id,uid)}")
-@bot.message_handler(commands=["unwarn"])
-def unwarn(m):
-    u=manageable(m)
-    if not u:return
-    with lock:data["warnings"][f"{m.chat.id}:{u.id}"]=0
-    save_data();reply(m,"✅ اخطارهای کاربر پاک شد.")
-@bot.message_handler(commands=["mute"])
-def mute(m):
-    u=manageable(m)
-    if not u:return
-    try:
-        secs=max(30,min(86400,int(settings(m.chat.id)["mute_seconds"])))
-        bot.restrict_chat_member(m.chat.id,u.id,until_date=int(time.time())+secs,permissions=types.ChatPermissions(can_send_messages=False))
-        reply(m,f"🔇 کاربر برای {secs} ثانیه سکوت شد.");log_action(m.chat.id,f"سکوت {u.id} برای {secs} ثانیه")
-    except Exception:log.exception("Mute failed");reply(m,"⚠️ سکوت ناموفق بود؛ مجوز محدودکردن اعضا را بررسی کن.")
-@bot.message_handler(commands=["unmute"])
-def unmute(m):
-    u=manageable(m)
-    if not u:return
-    try:
-        bot.restrict_chat_member(m.chat.id,u.id,permissions=types.ChatPermissions(can_send_messages=True,can_send_audios=True,can_send_documents=True,can_send_photos=True,can_send_videos=True,can_send_video_notes=True,can_send_voice_notes=True,can_send_polls=True,can_send_other_messages=True,can_add_web_page_previews=True))
-        reply(m,"🔊 سکوت کاربر برداشته شد.")
-    except Exception:log.exception("Unmute failed");reply(m,"⚠️ رفع سکوت ناموفق بود؛ مجوزها را بررسی کن.")
-@bot.message_handler(commands=["ban"])
-def ban(m):
-    u=manageable(m)
-    if not u:return
-    try:bot.ban_chat_member(m.chat.id,u.id);reply(m,"⛔ کاربر مسدود شد.");log_action(m.chat.id,f"مسدودسازی {u.id}")
-    except Exception:log.exception("Ban failed");reply(m,"⚠️ مسدودسازی ناموفق بود؛ مجوزهای ربات را بررسی کن.")
-@bot.message_handler(commands=["unban"])
-def unban(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ فقط مدیر گروه.");return
-    p=(m.text or "").split()
-    if len(p)<2 or not p[1].lstrip("-").isdigit():reply(m,"استفاده: /unban شناسه_عددی");return
-    try:bot.unban_chat_member(m.chat.id,int(p[1]));reply(m,"✅ مسدودیت برداشته شد.")
-    except Exception:log.exception("Unban failed");reply(m,"⚠️ رفع مسدودیت ناموفق بود.")
-@bot.message_handler(commands=["kick"])
-def kick(m):
-    u=manageable(m)
-    if not u:return
-    try:bot.ban_chat_member(m.chat.id,u.id);bot.unban_chat_member(m.chat.id,u.id);reply(m,"👢 کاربر از گروه اخراج شد.");log_action(m.chat.id,f"اخراج {u.id}")
-    except Exception:log.exception("Kick failed");reply(m,"⚠️ اخراج ناموفق بود.")
-@bot.message_handler(commands=["purge"])
-def purge(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ فقط مدیر گروه.");return
-    if not m.reply_to_message:reply(m,"روی اولین پیام موردنظر ریپلای کن و /purge بزن.");return
-    first=m.reply_to_message.message_id;last=m.message_id-1
-    if last-first>100:first=last-100
-    deleted=0
-    for mid in range(first,last+1):
-        try:bot.delete_message(m.chat.id,mid);deleted+=1
-        except Exception:pass
-    reply(m,f"🧹 پاک‌سازی تمام شد؛ پیام‌های پاک‌شده: {deleted}")
-def set_setting(m,key,value):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ مدیر گروه باید این دستور را داخل گروه اجرا کند.");return
-    settings(m.chat.id)[key]=value;save_data();reply(m,"✅ تنظیم ذخیره شد.")
-for _cmd,_key,_value in [("antilink_on","anti_link",True),("antilink_off","anti_link",False),("antispam_on","anti_spam",True),("antispam_off","anti_spam",False),("welcome_on","welcome_enabled",True),("welcome_off","welcome_enabled",False)]:
-    def _make_handler(key,value):
-        def _handler(m):set_setting(m,key,value)
-        return _handler
-    bot.message_handler(commands=[_cmd])(_make_handler(_key,_value))
-@bot.message_handler(commands=["addbadword"])
-def add_badword(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ فقط مدیر گروه.");return
-    word=(m.text or "").partition(" ")[2].strip()[:100]
-    if not word:reply(m,"استفاده: /addbadword کلمه");return
-    with lock:
-        arr=data["badwords"].setdefault(str(m.chat.id),[])
-        if word.casefold() not in [str(x).casefold() for x in arr]:arr.append(word)
-    save_data();reply(m,"✅ کلمه به فیلتر اضافه شد.")
-@bot.message_handler(commands=["delbadword"])
-def del_badword(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ فقط مدیر گروه.");return
-    word=(m.text or "").partition(" ")[2].strip()
-    if not word:reply(m,"استفاده: /delbadword کلمه");return
-    with lock:data["badwords"][str(m.chat.id)]=[x for x in data["badwords"].get(str(m.chat.id),[]) if str(x).casefold()!=word.casefold()]
-    save_data();reply(m,"✅ کلمه از فیلتر حذف شد.")
-@bot.message_handler(commands=["badwords"])
-def list_badwords(m):
-    if not group_chat(m) or not is_admin(m.chat.id,m.from_user.id):reply(m,"⛔ فقط مدیر گروه.");return
-    arr=badwords(m.chat.id);reply(m,"📃 کلمات فیلتر:\n"+("\n".join(arr) if arr else "هنوز کلمه‌ای ثبت نشده."))
-@bot.message_handler(content_types=["new_chat_members"])
-def welcome_members(m):
-    s=settings(m.chat.id)
-    if not s["welcome_enabled"]:return
-    template=str(s.get("welcome_text") or DEFAULT_SETTINGS["welcome_text"])
-    for u in m.new_chat_members:
-        if not u.is_bot:
-            try:bot.send_message(m.chat.id,template.replace("{name}",u.first_name or "دوست عزیز"))
-            except Exception:log.exception("Welcome failed")
-def group_ai(m,text_value):
-    if not bot_username or not text_value:return False
-    mentioned=bool(re.search(r"@"+re.escape(bot_username)+r"\b",text_value,re.I));r=m.reply_to_message
-    replied=bool(r and r.from_user and r.from_user.is_bot and (r.from_user.username or "").lower()==bot_username.lower())
-    if not (mentioned or replied):return False
-    cleaned=re.sub(r"@"+re.escape(bot_username)+r"\b","",text_value,flags=re.I).strip()
-    if not cleaned and r:cleaned=(r.text or r.caption or "").strip()
-    if cleaned:ai_reply(m,cleaned)
-    else:reply(m,"سؤالت رو هم بنویس تا جواب بدم.")
-    return True
-@bot.message_handler(func=lambda m: bool(m.text) and m.chat.type=="private" and not m.text.startswith("/"),content_types=["text"])
-def private_ai(m):
-    if m.from_user and not m.from_user.is_bot:
-        if m.from_user.id in font_waiting:
-            idx=font_waiting.pop(m.from_user.id); reply(m,convert_font(m.text,idx)); return
-        ai_reply(m,m.text.strip())
+            r = requests.get(url, timeout=7, headers={"User-Agent": "MASIH-GUARD/30.0"})
+            if r.ok:
+                body = r.text
+                for pat in patterns:
+                    for link in re.findall(pat, body):
+                        link = link.rstrip(".,);]}")
+                        if link not in found:
+                            found.append(link)
+        except Exception as e:
+            log.info("Proxy source unavailable: %s", e)
+    return found[:10]
 
-GROUP_CONTENT=["text","photo","video","document","audio","voice","animation","sticker","video_note","contact","location","venue","poll"]
-@bot.message_handler(func=lambda m: True,content_types=GROUP_CONTENT)
-def moderate(m):
-    if not m.from_user or m.from_user.is_bot or not group_chat(m):return
-    text_value=(m.text or m.caption or "").strip()
-    # Persian text aliases; checked here so generic moderation cannot swallow them.
-    normalized=text_value.casefold().strip()
-    if normalized in ("پروکسی","proxy"):
-        proxies(m);return
-    if normalized in ("فونت masih","فونت مسیح","فونت" ):
-        bot.send_message(m.chat.id,"🖋 یکی از ۱۰۰ سبک فونت را انتخاب کن؛ بعد از انتخاب، متن را در گفت‌وگوی خصوصی ربات بفرست.",reply_markup=font_menu(0));return
-    if normalized in ("پنل","پنل مدیریت"):
-        if is_admin(m.chat.id,m.from_user.id):bot.send_message(m.chat.id,"✨ پنل مدیریت MASIH GUARD v10.0",reply_markup=panel_markup(m.chat.id))
-        else:reply(m,"⛔ پنل فقط برای مدیران گروه است.")
+
+def handle_proxy(message):
+    links = get_proxy_links()
+    if not links:
+        bot.reply_to(message, "⚠️ فعلاً نتونستم فهرست پروکسی رو از منبع عمومی دریافت کنم. چند دقیقه بعد دوباره «پروکسی» رو بفرست.")
         return
-    s=settings(m.chat.id); admin=is_admin(m.chat.id,m.from_user.id)
-    with lock:data["stats"][str(m.chat.id)]=int(data["stats"].get(str(m.chat.id),0))+1
-    if not admin:
-        if s["anti_link"] and has_link(m,text_value):
-            try:bot.delete_message(m.chat.id,m.message_id);log_action(m.chat.id,f"حذف لینک از {m.from_user.id}");bot.send_message(m.chat.id,"🔗 ارسال لینک در گروه مجاز نیست.")
-            except Exception:log.exception("Anti-link failed; check delete permission")
-            return
-        words=badwords(m.chat.id)
-        if s["badword_filter"] and text_value and any(w and w.casefold() in text_value.casefold() for w in words):
-            try:bot.delete_message(m.chat.id,m.message_id);log_action(m.chat.id,f"حذف کلمه فیلترشده از {m.from_user.id}")
-            except Exception:log.exception("Badword delete failed")
-            return
-        if s["lock_media"] and m.content_type in ("photo","video","document","audio","voice","animation","video_note","sticker"):
-            try:bot.delete_message(m.chat.id,m.message_id)
-            except Exception:log.exception("Media lock failed")
-            return
-        if s["anti_duplicate"] and text_value:
-            hist=duplicate_history[(m.chat.id,m.from_user.id)];norm=re.sub(r"\s+"," ",text_value).casefold()
-            if norm and norm in hist:
-                try:bot.delete_message(m.chat.id,m.message_id);log_action(m.chat.id,f"حذف پیام تکراری از {m.from_user.id}")
-                except Exception:log.exception("Duplicate delete failed")
-                return
-            hist.append(norm)
-        if s["anti_spam"]:
-            now=time.time();hist=spam_history[(m.chat.id,m.from_user.id)];hist.append(now);window=max(1,min(60,int(s.get("spam_window",8))))
-            while hist and now-hist[0]>window:hist.popleft()
-            maximum=max(2,min(30,int(s.get("max_messages",6))))
-            if len(hist)>maximum:
-                try:
-                    bot.delete_message(m.chat.id,m.message_id);secs=max(30,min(86400,int(s.get("mute_seconds",60))))
-                    bot.restrict_chat_member(m.chat.id,m.from_user.id,until_date=int(time.time())+secs,permissions=types.ChatPermissions(can_send_messages=False))
-                    bot.send_message(m.chat.id,f"🚫 به دلیل ارسال پیام‌های زیاد، کاربر برای {secs} ثانیه سکوت شد.");log_action(m.chat.id,f"ضداسپم: سکوت {m.from_user.id}")
-                except Exception:log.exception("Anti-spam failed; check admin permissions")
-                finally:hist.clear()
-                return
-    group_ai(m,text_value)
+    lines = ["🌐 <b>فهرست پروکسی‌های عمومی تلگرام</b>", "━━━━━━━━━━━━━━━━━━"]
+    lines.extend(f"{i}. {html.escape(link)}" for i, link in enumerate(links, 1))
+    lines.append("\n⚠️ سرعت و پینگ این لینک‌ها از اینجا تست نشده و ممکنه بعضی‌ها از کار افتاده باشن. پروکسی ناشناس رو برای کارهای حساس با احتیاط استفاده کن.")
+    lines.append("✦ <b>Masih Hackring</b>")
+    send_long(message.chat.id, "\n".join(lines), message.message_id)
 
-def flask_thread():app.run(host="0.0.0.0",port=PORT,use_reloader=False)
-def polling_loop():
-    global bot_username
-    delay=3
+# ---------- moderation ----------
+def mute_user(chat_id, user_id, seconds):
+    until = int(time.time()) + max(30, min(int(seconds), 2_592_000))
+    permissions = types.ChatPermissions(can_send_messages=False, can_send_audios=False, can_send_documents=False,
+        can_send_photos=False, can_send_videos=False, can_send_video_notes=False, can_send_voice_notes=False,
+        can_send_polls=False, can_send_other_messages=False, can_add_web_page_previews=False)
+    bot.restrict_chat_member(chat_id, user_id, permissions, until_date=until)
+    DATA["muted"][f"{chat_id}:{user_id}"] = until
+    save_data()
+
+
+def unmute_user(chat_id, user_id):
+    permissions = types.ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True,
+        can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True,
+        can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True)
+    bot.restrict_chat_member(chat_id, user_id, permissions)
+    DATA["muted"].pop(f"{chat_id}:{user_id}", None)
+    save_data()
+
+
+def ban_user(chat_id, user_id):
+    bot.ban_chat_member(chat_id, user_id)
+    DATA["banned"][f"{chat_id}:{user_id}"] = int(time.time())
+    save_data()
+
+
+def moderation_notice(message, user, status, reason=None):
+    if "تبچی" in status:
+        state = "سکوت در گروه"
+    elif "مسدود" in status:
+        state = "مسدود شد"
+    else:
+        state = status
+    text = f"〰️ کاربر {display_name(user)} {status}\n🎖 وضعیت کاربر : {state}"
+    if reason:
+        text += f"\n📝 دلیل: {html.escape(reason)}"
+    text += "\n━━━ 💢 MASIH GUARD 〰️ ━━━\n〰️ توسط : Masih Hackring"
+    bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
+
+
+def add_warning(chat_id, user_id):
+    key = f"{chat_id}:{user_id}"
+    DATA["warnings"][key] = int(DATA["warnings"].get(key, 0)) + 1
+    save_data()
+    return DATA["warnings"][key]
+
+
+def try_delete(message):
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+        return True
+    except Exception:
+        return False
+
+@bot.message_handler(commands=["start", "panel"])
+def start(message):
+    bot.send_message(message.chat.id, panel_text(), reply_markup=main_panel(), disable_web_page_preview=True)
+
+@bot.message_handler(commands=["about"])
+def about(message):
+    bot.reply_to(message, f"🌈 <b>{BOT_NAME} v{VERSION}</b>\n🛡️ ابزار مدیریت گروه، ضداسپم و خوشامدگویی\n✦ سازنده: <b>{AUTHOR}</b>\n📨 ارتباط: @{CREATOR_URL.rsplit('/', 1)[-1]}")
+
+@bot.message_handler(commands=["help"])
+def help_command(message):
+    txt = (
+        "🌈 <b>راهنمای MASIH GUARD v30.0</b>\n━━━━━━━━━━━━━━━━━━\n"
+        "• <code>/panel</code> پنل اصلی\n• <code>/rules</code> دیدن قوانین\n• <code>/setrules متن</code> تنظیم قوانین (مدیر)\n"
+        "• <code>/antilink on|off</code> ضدلینک (مدیر)\n• <code>/antispam on|off</code> ضداسپم (مدیر)\n"
+        "• <code>/warn</code> اخطار به کاربر (روی پیامش ریپلای کن)\n• <code>/mute 60</code> سکوت (ریپلای؛ ثانیه اختیاری)\n"
+        "• <code>/unmute</code> رفع سکوت (ریپلای)\n• <code>/ban</code> مسدودکردن (ریپلای)\n• <code>/unban شناسه</code> رفع مسدودی\n"
+        "• <code>/kick</code> اخراج (ریپلای)\n• <code>/purge</code> پاک‌کردن پیام انتخاب‌شده و پیام‌های بعد از آن در حد دسترسی تلگرام\n"
+        "• <code>فونت متن</code> ساخت ۱۰۰ مدل نوشتار\n• <code>پروکسی</code> دریافت فهرست پروکسی عمومی\n"
+        "━━━━━━━━━━━━━━━━━━\n⚠️ دستورهای مدیریتی نیاز به دسترسی مدیر ربات دارند."
+    )
+    bot.reply_to(message, txt)
+
+@bot.message_handler(commands=["rules"])
+def rules_command(message):
+    bot.reply_to(message, settings(message.chat.id)["rules"])
+
+@bot.message_handler(commands=["setrules"])
+def setrules_command(message):
+    if not admin_required(message): return
+    text = (message.text or "").partition(" ")[2].strip()
+    if not text:
+        bot.reply_to(message, "نمونه: <code>/setrules احترام به همه و ممنوعیت تبلیغات</code>")
+        return
+    settings(message.chat.id)["rules"] = text
+    save_data()
+    bot.reply_to(message, "✅ قوانین گروه ذخیره شد.")
+
+@bot.message_handler(commands=["antilink", "antispam", "antiduplicate", "badwords", "welcome", "lockmedia"])
+def toggle_command(message):
+    if not admin_required(message): return
+    cmd = message.text.split()[0].split("@")[0].lstrip("/")
+    value = (message.text or "").split()
+    if len(value) < 2 or value[1].lower() not in ("on", "off"):
+        bot.reply_to(message, f"استفاده: <code>/{cmd} on</code> یا <code>/{cmd} off</code>")
+        return
+    key_map = {"antilink": "anti_link", "antispam": "anti_spam", "antiduplicate": "anti_duplicate", "badwords": "badword_filter", "welcome": "welcome_enabled", "lockmedia": "lock_media"}
+    key = key_map[cmd]
+    settings(message.chat.id)[key] = value[1].lower() == "on"
+    save_data()
+    bot.reply_to(message, f"✅ {cmd}: {'روشن' if settings(message.chat.id)[key] else 'خاموش'} شد.")
+
+@bot.message_handler(commands=["warn", "mute", "unmute", "ban", "unban", "kick"])
+def moderation_command(message):
+    if not admin_required(message): return
+    cmd = message.text.split()[0].split("@")[0].lstrip("/")
+    target = target_from_message(message)
+    if cmd == "unban" and not target:
+        parts = (message.text or "").split()
+        if len(parts) > 1 and parts[1].isdigit():
+            try:
+                bot.unban_chat_member(message.chat.id, int(parts[1]), only_if_banned=True)
+                DATA["banned"].pop(f"{message.chat.id}:{parts[1]}", None)
+                save_data()
+                bot.reply_to(message, "✅ مسدودی کاربر برداشته شد.")
+            except Exception as e: bot.reply_to(message, f"❌ انجام نشد: {html.escape(str(e)[:250])}")
+        else: bot.reply_to(message, "روی پیام کاربر ریپلای کن یا شناسه عددی بده: <code>/unban 123456</code>")
+        return
+    if not target:
+        bot.reply_to(message, "⚠️ روی پیام کاربر ریپلای کن و دستور رو بفرست.")
+        return
+    if target.id == OWNER_ID or target.id == message.from_user.id:
+        bot.reply_to(message, "⛔ این کاربر رو نمی‌تونم با این دستور مدیریت کنم.")
+        return
+    try:
+        if cmd == "warn":
+            count = add_warning(message.chat.id, target.id)
+            limit = int(settings(message.chat.id)["max_warnings"])
+            bot.reply_to(message, f"⚠️ به {mention(target)} اخطار داده شد. ({count}/{limit})")
+            if count >= limit:
+                mute_user(message.chat.id, target.id, int(settings(message.chat.id)["mute_seconds"]))
+                DATA["warnings"][f"{message.chat.id}:{target.id}"] = 0
+                save_data()
+                bot.send_message(message.chat.id, f"🔇 {mention(target)} به دلیل دریافت چند اخطار، موقتاً ساکت شد.")
+        elif cmd == "mute":
+            parts = (message.text or "").split()
+            secs = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else int(settings(message.chat.id)["mute_seconds"])
+            mute_user(message.chat.id, target.id, secs)
+            moderation_notice(message, target, "در لیست تبچی بود !")
+        elif cmd == "unmute":
+            unmute_user(message.chat.id, target.id)
+            bot.reply_to(message, f"🔊 سکوت {mention(target)} برداشته شد.")
+        elif cmd == "ban":
+            ban_user(message.chat.id, target.id)
+            moderation_notice(message, target, "در لیست مسدودها شد !", "تخلف از قوانین گروه")
+        elif cmd == "kick":
+            bot.ban_chat_member(message.chat.id, target.id)
+            bot.unban_chat_member(message.chat.id, target.id, only_if_banned=True)
+            bot.reply_to(message, f"👢 {mention(target)} از گروه اخراج شد.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ انجام نشد. بررسی کن ربات مدیر و دسترسی لازم رو داشته باشه.\n<code>{html.escape(str(e)[:300])}</code>")
+
+@bot.message_handler(commands=["purge"])
+def purge_command(message):
+    if not admin_required(message): return
+    if not message.reply_to_message:
+        bot.reply_to(message, "برای پاک‌کردن پیام، روی همون پیام ریپلای کن و /purge بفرست.")
+        return
+    try:
+        bot.delete_message(message.chat.id, message.reply_to_message.message_id)
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception as e:
+        bot.reply_to(message, f"❌ پاک‌کردن پیام انجام نشد؛ دسترسی حذف پیام رو بررسی کن.\n<code>{html.escape(str(e)[:200])}</code>")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("panel:"))
+def panel_callbacks(call):
+    key = call.data.split(":", 1)[1]
+    chat_id = call.message.chat.id if call.message else call.from_user.id
+    if key == "manage":
+        text = "🔴 <b>مدیریت گروه</b>\nروی پیام کاربر ریپلای کن: /warn، /mute 60، /unmute، /ban یا /kick\nبرای رفع مسدودی: /unban شناسه"
+    elif key == "security":
+        text = "🟠 <b>امنیت</b>\n/antilink on|off\n/antispam on|off\n/antiduplicate on|off\n/badwords on|off\n/welcome on|off\n/lockmedia on|off"
+    elif key == "rules":
+        text = settings(chat_id)["rules"]
+    elif key == "help":
+        text = "🟢 برای راهنمای کامل دستور /help رو بفرست.\nفونت: <code>فونت اسم دلخواه</code>\nپروکسی: <code>پروکسی</code>"
+    elif key == "status":
+        st = DATA.get("stats", {})
+        text = f"🔵 <b>وضعیت ربات</b>\nنسخه: {VERSION}\nپیام‌های بررسی‌شده: {st.get('messages', 0)}\nموارد مسدودشده: {st.get('blocked', 0)}\nخوشامدها: {st.get('welcomes', 0)}"
+    elif key == "creator":
+        text = f"🟣 سازنده: <b>{AUTHOR}</b>\nارتباط: {html.escape(CREATOR_URL)}"
+    else:
+        text = "🌈 <b>MASIH GUARD | پنل هفت‌رنگ</b>\n🔴 مدیریت 🟠 امنیت 🟡 قوانین 🟢 راهنما 🔵 وضعیت 🟣 سازنده\n✦ by Masih Hackring"
+    try:
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, text, reply_markup=main_panel() if key == "rainbow" else None, disable_web_page_preview=True)
+    except Exception as e:
+        log.warning("Callback failed: %s", e)
+
+# Private messages: commands are handled above; font/proxy commands must work in private too.
+@bot.message_handler(func=lambda m: m.chat.type == "private" and bool(m.text) and not m.text.startswith("/"), content_types=["text"])
+def private_text(message):
+    text = message.text.strip()
+    if re.match(r"^(?:فونت|font)(?:\s|$)", text, re.I):
+        handle_font_command(message, text)
+        return
+    if re.fullmatch(r"پروکسی|proxy", text, re.I):
+        handle_proxy(message)
+        return
+    if AI_API_KEY:
+        try:
+            r = requests.post(AI_BASE_URL, headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json", "HTTP-Referer": "https://t.me/", "X-Title": BOT_NAME}, json={"model": AI_MODEL, "messages": [{"role": "system", "content": "تو دستیار فارسی‌زبان مودب MASIH GUARD هستی. پاسخ کوتاه و امن بده."}, {"role": "user", "content": text}]}, timeout=25)
+            if r.ok:
+                answer = r.json()["choices"][0]["message"]["content"].strip()
+                send_long(message.chat.id, html.escape(answer), message.message_id)
+                return
+        except Exception as e:
+            log.warning("AI request failed: %s", e)
+    bot.reply_to(message, "سلام! 🌈 برای امکانات، /help رو بزن. برای فونت هر اسم یا متن بنویس «فونت اسم دلخواه» و برای فهرست پروکسی بنویس «پروکسی».")
+
+# Group welcome and moderation filter. Commands are handled by command handlers above.
+message_times = defaultdict(deque)
+last_messages = {}
+
+@bot.message_handler(content_types=["new_chat_members"])
+def welcome_members(message):
+    cfg = settings(message.chat.id)
+    if not cfg.get("welcome_enabled", True):
+        return
+    for user in message.new_chat_members or []:
+        if user.id == bot.get_me().id:
+            continue
+        name = display_name(user)
+        group = html.escape(message.chat.title or "گروه")
+        template = cfg.get("welcome_text", DEFAULT_SETTINGS["welcome_text"])
+        try:
+            out = template.format(name=name, group=group)
+        except Exception:
+            out = f"سلام {name} به گروه: {group} خوش اومدی! 🍻💜\n━━━ 🛡️ MASIH GUARD ━━━\n〰️ توسط: Masih Hackring"
+        bot.send_message(message.chat.id, out, disable_web_page_preview=True)
+        DATA["stats"]["welcomes"] = DATA["stats"].get("welcomes", 0) + 1
+    save_data()
+
+@bot.message_handler(content_types=["text", "photo", "video", "document", "animation", "audio", "voice", "video_note", "sticker"])
+def group_moderation(message):
+    if message.chat.type not in ("group", "supergroup") or not message.from_user:
+        return
+    if message.from_user.is_bot or is_admin(message.chat.id, message.from_user.id):
+        return
+    text = message.text or message.caption or ""
+    cfg = settings(message.chat.id)
+    DATA["stats"]["messages"] = DATA["stats"].get("messages", 0) + 1
+
+    # Commands and direct font/proxy triggers in groups.
+    if text and re.match(r"^(?:فونت|font)(?:\s|$)", text.strip(), re.I):
+        handle_font_command(message, text.strip())
+        return
+    if text and re.fullmatch(r"پروکسی|proxy", text.strip(), re.I):
+        handle_proxy(message)
+        return
+
+    # Anti-spam: rapid repeated messages are muted and reported using the requested format.
+    now = time.time()
+    uid_key = f"{message.chat.id}:{message.from_user.id}"
+    q = message_times[uid_key]
+    q.append(now)
+    window = int(cfg.get("spam_window", 8))
+    while q and now - q[0] > window:
+        q.popleft()
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    repeated = normalized and last_messages.get(uid_key) == normalized
+    last_messages[uid_key] = normalized
+    spam = cfg.get("anti_spam", True) and len(q) > int(cfg.get("max_messages", 6))
+    duplicate = cfg.get("anti_duplicate", True) and repeated and len(normalized) > 3
+    link = cfg.get("anti_link", True) and bool(re.search(r"(?:https?://|www\.|t\.me/|telegram\.me/)", text, re.I))
+    badword = cfg.get("badword_filter", False) and any(w in text.lower() for w in cfg.get("bad_words", []))
+    media_locked = cfg.get("lock_media", False) and message.content_type in ("photo", "video", "document", "animation", "audio", "voice", "video_note", "sticker")
+
+    if spam or duplicate:
+        try:
+            try_delete(message)
+            mute_user(message.chat.id, message.from_user.id, int(cfg.get("mute_seconds", 60)))
+            DATA["stats"]["blocked"] = DATA["stats"].get("blocked", 0) + 1
+            save_data()
+            # This report is triggered by spam/repeated-message rules; it does not claim to identify every tabchi account.
+            bot.send_message(message.chat.id,
+                f"〰️ کاربر {display_name(message.from_user)} در لیست تبچی بود !\n"
+                "🎖 وضعیت کاربر : سکوت در گروه\n"
+                "━━━ 💢 MASIH GUARD 〰️ ━━━\n〰️ توسط : Masih Hackring")
+        except Exception as e:
+            log.warning("Anti-spam action failed: %s", e)
+        return
+    if link or badword or media_locked:
+        try:
+            if try_delete(message):
+                DATA["stats"]["blocked"] = DATA["stats"].get("blocked", 0) + 1
+                save_data()
+                reason = "ارسال لینک" if link else "کلمات ممنوعه" if badword else "ارسال رسانه در حالت قفل"
+                bot.send_message(message.chat.id, f"⚠️ {mention(message.from_user)} پیام حذف شد.\n📝 دلیل: {reason}\n━━━ 💢 MASIH GUARD 〰️ ━━━")
+        except Exception as e:
+            log.warning("Filter action failed: %s", e)
+
+@app.get("/")
+def home():
+    return f"{BOT_NAME} v{VERSION} is running | by {AUTHOR}", 200
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True, "bot": BOT_NAME, "version": VERSION}), 200
+
+
+def run_web():
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+
+
+def run_bot():
     while True:
         try:
-            log.info("Starting %s v%s",BOT_NAME,VERSION);me=bot.get_me();bot_username=me.username or ""
-            log.info("Telegram connected as @%s",bot_username or "unknown");bot.remove_webhook()
-            bot.infinity_polling(timeout=30,long_polling_timeout=25,skip_pending=False);delay=3
-        except KeyboardInterrupt:log.info("Bot stopped");break
-        except Exception:log.exception("Polling stopped; reconnect in %s seconds",delay);time.sleep(delay);delay=min(delay*2,60)
-if __name__=="__main__":
-    threading.Thread(target=flask_thread,daemon=True).start()
-    polling_loop()
+            log.info("Starting %s v%s", BOT_NAME, VERSION)
+            try:
+                bot.remove_webhook()
+            except Exception:
+                pass
+            bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25, allowed_updates=["message", "callback_query"])
+        except Exception as e:
+            log.exception("Polling stopped: %s", e)
+            time.sleep(5)
+
+load_data()
+threading.Thread(target=run_web, daemon=True).start()
+run_bot()
