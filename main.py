@@ -27,12 +27,14 @@ DEFAULT_GROUP = {
     "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True,
     "anti_forward": False, "media_lock": False, "welcome_on": True,
     "farewell_on": False, "join_approval": False, "bad_words": [], "whitelist": [],
-    "warn_limit": 3, "rules": "احترام به اعضا الزامی است.",
+    "warn_limit": 3, "lock_photos": False, "lock_videos": False, "lock_files": False,
+    "lock_stickers": False, "lock_voice": False, "lock_video_notes": False,
+    "rules": "احترام به اعضا الزامی است.",
     "welcome_text": "سلام {name}، به گروه خوش آمدی!", "farewell_text": "خداحافظ {name}",
-    "auto_replies": {}
+    "auto_replies": {}, "custom_commands": {}, "phone_filter": False
 }
 DEFAULT_DATA = {
-    "groups": {}, "warnings": {}, "logs": [], "proxies": [], "customers": {},
+    "groups": {}, "warnings": {}, "logs": [], "proxies": [], "customers": {}, "moderation_lists": {}, "message_history": {},
     "tickets": {}, "points": {}, "seen": {}, "stats": {"messages": 0, "blocked": 0,
     "warns": 0, "joins": 0, "tickets": 0},
     "settings": {"smart_security": True},
@@ -40,10 +42,10 @@ DEFAULT_DATA = {
         "public_features": "", "channel_url": "https://t.me/IRHACK_APP33",
         "website_url": "https://neon-portfolio-7vhj.onrender.com",
         "daily_reward": 10, "luck_max": 5, "referral_reward": 5,
-        "shop_packages": [[40, 15], [80, 30], [120, 45], [160, 60]]
+        "shop_packages": [[40, 15], [80, 30]]
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
-    "last_daily": {}
+    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {}
 }
 
 def clone(obj): return json.loads(json.dumps(obj, ensure_ascii=False))
@@ -62,6 +64,12 @@ def load_data():
         if k not in data: data[k] = clone(v)
     for k, v in DEFAULT_DATA["stats"].items(): data["stats"].setdefault(k, v)
     for k, v in DEFAULT_DATA["settings"].items(): data["settings"].setdefault(k, v)
+    data.setdefault("group_licenses", {})
+    data.setdefault("join_requests", {})
+    data.setdefault("group_requests", {})
+    data.setdefault("moderation_lists", {})
+    data.setdefault("message_history", {})
+    data.setdefault("group_requests", {})
     for k, v in DEFAULT_DATA.items():
         if isinstance(v, dict) and not isinstance(data.get(k), dict): data[k] = clone(v)
         if isinstance(v, list) and not isinstance(data.get(k), list): data[k] = clone(v)
@@ -122,6 +130,33 @@ def get_group_settings(chat_id):
     for k, v in DEFAULT_GROUP.items(): settings.setdefault(k, clone(v))
     return settings
 
+def group_license_status(chat_id):
+    """Return (active, license_record); a license can be permanent or time-limited."""
+    record = DATA.setdefault("group_licenses", {}).get(str(chat_id), {})
+    if not record or not record.get("approved", False):
+        return False, record
+    expires = str(record.get("expires", "") or "").strip()
+    if not expires:
+        return True, record
+    try:
+        active = datetime.strptime(expires, "%Y-%m-%d %H:%M:%S") > datetime.now()
+    except ValueError:
+        active = False
+    return active, record
+
+def is_group_licensed(chat_id):
+    return group_license_status(chat_id)[0]
+
+def support_contact_markup():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📩 ارتباط با پشتیبان نصب", url=f"tg://user?id={OWNER_ID}"))
+    return kb
+
+def group_install_message(chat_id, title="این گروه"):
+    return ("🛡️ <b>فعال‌سازی MASIH GUARD</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"برای استفاده از امکانات مدیریتی در «{esc(title)}»، باید مجوز نصب از پشتیبانی دریافت شود.\n\n"
+            "📩 برای بررسی و فعال‌سازی، با پشتیبان ربات ارتباط بگیرید.")
+
 def bot_settings():
     """Return persisted global settings, filling defaults for older data files."""
     defaults = DEFAULT_DATA["bot_settings"]
@@ -154,7 +189,7 @@ SECTIONS = {
     "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی", "games":"🎮 بازی و امتیاز",
     "backup":"💾 پشتیبان‌گیری", "daily":"📅 گزارش روزانه",
     "smart":"🧩 امنیت هوشمند", "status":"🚀 وضعیت ربات",
-    "bot_settings":"🎛️ تنظیمات عمومی ربات"
+    "bot_settings":"🎛️ تنظیمات عمومی ربات", "licenses":"🛡️ مجوز نصب گروه‌ها"
 }
 
 PUBLIC_FEATURES = (
@@ -165,7 +200,7 @@ PUBLIC_FEATURES = (
     "├ کلمات ممنوع و اخطار خودکار\n\n"
     "👥 <b>مدیریت اعضا</b>\n"
     "├ اخطار، سکوت، رفع سکوت\n├ مسدودسازی، آزادسازی و اخراج\n"
-    "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n\n"
+    "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n├ سنجاق پیام و پاک‌سازی پیام‌ها با فرمان مدیر\n\n"
     "⚙️ <b>ابزارهای کاربردی</b>\n"
     "├ قوانین و پاسخ خودکار\n├ تبدیل متن به فونت‌های فانتزی\n"
     "├ دریافت پروکسی‌های ذخیره‌شده\n├ هوش مصنوعی و تیکت پشتیبانی\n"
@@ -210,10 +245,10 @@ def main_keyboard():
 def section_keyboard(section):
     kb = types.InlineKeyboardMarkup(row_width=1)
     choices = {
-      "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock")],
+      "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist")],
       "welcome":[("👋 خوشامدگویی","toggle:welcome_on"),("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text")],
-      "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word")],
-      "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick")]],
+      "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word"),("🧩 افزودن فرمان اختصاصی","ask:add_custom_command"),("🗑 حذف فرمان اختصاصی","ask:delete_custom_command"),("📣 ارسال اطلاعیه","ask:announcement")],
+      "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
       "settings":[("⚙️ تنظیم سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules")],
       "referrals":[("💎 تنظیمات و آمار الماس","show:diamond_stats"),("👥 نظام زیرمجموعه","show:referral_stats"),("🛒 فروشگاه اشتراک","show:shop")],
       "proxy":[("➕ افزودن پروکسی","ask:add_proxy"),("📋 نمایش پروکسی‌ها","show:proxies"),("🗑 حذف پروکسی","ask:delete_proxy")],
@@ -226,6 +261,7 @@ def section_keyboard(section):
       "daily":[("📅 گزارش روزانه","show:daily")],
       "smart":[("🧩 روشن/خاموش امنیت هوشمند","toggle:smart_security")],
       "status":[("🚀 وضعیت ربات","show:status")],
+      "licenses":[("➕ فعال‌سازی مجوز گروه","ask:activate_group"),("🗓 تمدید مجوز گروه","ask:extend_group"),("⛔ لغو مجوز گروه","ask:revoke_group"),("📋 فهرست گروه‌های مجاز","show:group_licenses"),("📨 درخواست‌های نصب","show:group_requests")],
       "bot_settings":[
         ("📝 متن معرفی /start","ask:public_features"),
         ("📢 تغییر لینک کانال","ask:channel_url"),
@@ -296,7 +332,7 @@ def referral_text(uid):
 
 def shop_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for item in bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]]):
+    for item in bot_settings().get("shop_packages", [[40,15],[80,30]]):
         try: diamonds, days = int(item[0]), int(item[1])
         except (TypeError, ValueError, IndexError): continue
         if diamonds > 0 and days > 0:
@@ -307,7 +343,7 @@ def shop_keyboard():
 def shop_text(uid):
     sub = DATA["subscriptions"].get(str(uid), {})
     expiry = sub.get("expires", "نداری")
-    packages = bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]])
+    packages = bot_settings().get("shop_packages", [[40,15],[80,30]])
     package_text = "\n".join(f"💎 {int(x[0])} الماس = {int(x[1])} روز" for x in packages if isinstance(x, (list, tuple)) and len(x) == 2)
     return ("🛒 <b>فروشگاه اشتراک MASIH GUARD</b>\n━━━━━━━━━━━━━━\n"
             f"{package_text}\n\n"
@@ -350,22 +386,28 @@ def luck_reward(uid):
 
 def buy_subscription(uid, diamonds, days):
     packages = {}
-    for item in bot_settings().get("shop_packages", [[40,15],[80,30],[120,45],[160,60]]):
+    for item in bot_settings().get("shop_packages", [[40,15],[80,30]]):
         try: packages[int(item[0])] = int(item[1])
         except (TypeError, ValueError, IndexError): continue
     if packages.get(diamonds) != days: return "❌ بسته معتبر نیست."
-    if wallet(uid) < diamonds: return "💎 الماس کافی نداری؛ از پاداش روزانه یا زیرمجموعه‌گیری استفاده کن."
-    # Charge then extend from the later of now or current expiry.
     from datetime import timedelta
-    now = datetime.now()
-    current = DATA["subscriptions"].get(str(uid), {}).get("expires", "")
-    try: base = datetime.strptime(current, "%Y-%m-%d %H:%M:%S")
-    except Exception: base = now
-    if base < now: base = now
-    if not transaction(uid, -diamonds, f"خرید اشتراک {days} روزه"): return "❌ خرید انجام نشد."
-    expires = (base + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    DATA["subscriptions"][str(uid)] = {"expires": expires, "updated": now_text()}
-    save_data()
+    with LOCK:
+        key=str(int(uid)); user=ensure_user(uid)
+        balance=int(user.get("diamonds",0))
+        if balance < diamonds: return "💎 الماس کافی نداری؛ از پاداش روزانه یا زیرمجموعه‌گیری استفاده کن."
+        now=datetime.now()
+        current=DATA.setdefault("subscriptions",{}).get(key,{}).get("expires","")
+        try: base=datetime.strptime(current,"%Y-%m-%d %H:%M:%S")
+        except Exception: base=now
+        if base < now: base=now
+        expires=(base+timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        # Charge and grant the subscription in one persisted update.
+        user["diamonds"]=balance-diamonds
+        history=DATA.setdefault("transactions",{}).setdefault(key,[])
+        history.append({"time":now_text(),"amount":-int(diamonds),"reason":f"خرید اشتراک {days} روزه","balance":user["diamonds"]})
+        DATA["transactions"][key]=history[-100:]
+        DATA["subscriptions"][key]={"expires":expires,"updated":now_text()}
+        save_data()
     add_log("subscription_bought", "", uid, f"{days} days")
     return f"✅ خرید موفق بود!\n⭐ اشتراک ویژه تا {esc(expires)} فعال است.\n💎 مانده: {wallet(uid)}"
 
@@ -403,8 +445,15 @@ def process_group_security(message):
     prev=DATA["seen"].get(key,{}); now=time.time(); reason=None
     if s.get("media_lock") and has_media(message): reason="ارسال رسانه در حالت قفل رسانه"
     elif s.get("anti_forward") and is_forwarded(message): reason="ارسال پیام فورواردشده"
+    elif s.get("lock_photos") and getattr(message,"photo",None): reason="ارسال عکس در حالت قفل عکس"
+    elif s.get("lock_videos") and getattr(message,"video",None): reason="ارسال فیلم در حالت قفل فیلم"
+    elif s.get("lock_files") and getattr(message,"document",None): reason="ارسال فایل در حالت قفل فایل"
+    elif s.get("lock_stickers") and (getattr(message,"sticker",None) or getattr(message,"animation",None)): reason="ارسال استیکر یا گیف در حالت قفل"
+    elif s.get("lock_voice") and (getattr(message,"voice",None) or getattr(message,"audio",None)): reason="ارسال پیام صوتی در حالت قفل"
+    elif s.get("lock_video_notes") and getattr(message,"video_note",None): reason="ارسال ویدئوی گرد در حالت قفل"
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
     elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
+    elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
     elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
     if not reason and text and s.get("anti_repeat") and prev.get("text")==text and now-prev.get("time",0)<30: reason="پیام تکراری"
     times=[t for t in prev.get("times",[]) if now-t<8]; times.append(now)
@@ -419,13 +468,70 @@ def process_group_security(message):
 @bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
 def group_message_handler(message):
     try:
+        if not is_group_licensed(message.chat.id):
+            # Keep the bot inert in unlicensed groups and notify once per group.
+            req = DATA.setdefault("group_requests", {})
+            key = str(message.chat.id)
+            last = req.get(key, 0)
+            if time.time() - float(last or 0) > 86400:
+                req[key] = time.time(); save_data()
+                try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
+                except Exception: pass
+            return
+        text=get_text(message)
+        # Keep a bounded history so /clean can remove recent messages sent after the bot joined.
+        history=DATA.setdefault("message_history",{}).setdefault(str(message.chat.id),[])
+        history.append({"message_id":message.message_id,"user_id":getattr(message.from_user,"id",0),"time":time.time()})
+        DATA["message_history"][str(message.chat.id)]=history[-200:]
+        # Group management shortcuts work only for admins and licensed groups.
+        if text and text.split()[0].split("@",1)[0] in {"/pin","/unpin","/clean","/cleanuser"}:
+            cmd=text.split()[0].split("@",1)[0]
+            if not is_group_admin(message.chat.id, message.from_user.id):
+                bot.reply_to(message,"⛔ این فرمان فقط برای مدیران گروه است."); return
+            if cmd=="/pin":
+                if not message.reply_to_message: bot.reply_to(message,"برای سنجاق، به پیام موردنظر پاسخ بده و /pin را بفرست."); return
+                bot.pin_chat_message(message.chat.id,message.reply_to_message.message_id)
+                add_log("message_pinned",message.chat.id,message.from_user.id,str(message.reply_to_message.message_id))
+                bot.reply_to(message,"📌 پیام سنجاق شد."); return
+            if cmd=="/unpin":
+                if message.reply_to_message: bot.unpin_chat_message(message.chat.id,message.reply_to_message.message_id)
+                else: bot.unpin_all_chat_messages(message.chat.id)
+                add_log("message_unpinned",message.chat.id,message.from_user.id,"برداشتن سنجاق")
+                bot.reply_to(message,"📌 سنجاق پیام برداشته شد."); return
+            if cmd=="/clean":
+                try: amount=int(text.split(maxsplit=1)[1])
+                except Exception: amount=10
+                if not 1<=amount<=100: bot.reply_to(message,"تعداد باید بین ۱ تا ۱۰۰ باشد."); return
+                ids=[x["message_id"] for x in DATA["message_history"][str(message.chat.id)][-amount:]]
+                deleted=0
+                for mid in reversed(ids):
+                    try: bot.delete_message(message.chat.id,mid); deleted+=1
+                    except Exception: pass
+                bot.reply_to(message,f"🧹 {deleted} پیام حذف شد."); add_log("messages_cleaned",message.chat.id,message.from_user.id,str(deleted)); return
+            if cmd=="/cleanuser":
+                parts=text.split()
+                if len(parts)<2: bot.reply_to(message,"قالب: /cleanuser شناسه_کاربر [تعداد]"); return
+                try: target_user=int(parts[1]); amount=int(parts[2]) if len(parts)>2 else 20
+                except ValueError: bot.reply_to(message,"شناسه و تعداد باید عدد باشند."); return
+                if not 1<=amount<=100: bot.reply_to(message,"تعداد باید بین ۱ تا ۱۰۰ باشد."); return
+                rows=[x for x in DATA["message_history"][str(message.chat.id)] if int(x.get("user_id",0))==target_user][-amount:]
+                deleted=0
+                for row in reversed(rows):
+                    try: bot.delete_message(message.chat.id,int(row["message_id"])); deleted+=1
+                    except Exception: pass
+                bot.reply_to(message,f"🧹 {deleted} پیام قابل‌حذف از عضو موردنظر پاک شد."); add_log("member_messages_cleaned",message.chat.id,message.from_user.id,f"target={target_user}, deleted={deleted}"); return
         DATA["stats"]["messages"]+=1
         if process_group_security(message): return
-        text=get_text(message)
         if text:
-            for keyword,reply in get_group_settings(message.chat.id).get("auto_replies",{}).items():
+            settings=get_group_settings(message.chat.id)
+            handled=False
+            for keyword,reply in settings.get("auto_replies",{}).items():
                 if keyword and keyword.casefold() in text.casefold():
-                    bot.reply_to(message,str(reply)[:4000]); break
+                    bot.reply_to(message,str(reply)[:4000]); handled=True; break
+            if not handled and text.startswith("!"):
+                command=text[1:].split(maxsplit=1)[0].casefold()
+                response=settings.get("custom_commands",{}).get(command)
+                if response: bot.reply_to(message,str(response)[:4000])
         save_data()
     except Exception as e: print("Group handler error:",repr(e))
 
@@ -434,7 +540,8 @@ def welcome_card(chat_id, member):
         count = bot.get_chat_member_count(chat_id)
     except Exception: count = "نامشخص"
     stamp = datetime.now()
-    name = esc(member.first_name or "دوست عزیز")
+    raw_name = member.first_name or "دوست عزیز"
+    name = f'<a href="tg://user?id={int(member.id)}">{esc(raw_name)}</a>'
     uname = ("@" + esc(member.username)) if getattr(member,"username",None) else "ندارد"
     return ("⚡ <b>MASIH GUARD</b> ⚡\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -447,10 +554,31 @@ def welcome_card(chat_id, member):
             f"👥 <b>تعداد اعضا:</b> {count}\n\n"
             "🛡️ <b>امنیت گروه فعال است</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "<i>Powered by MASIH GUARD S1000+</i>")
+            "<i>ساخته‌شده با MASIH GUARD S1000+</i>")
+
+
+@bot.my_chat_member_handler()
+def bot_added_or_removed(update):
+    """Unapproved group additions are notified and the bot leaves instead of running for free."""
+    try:
+        chat = update.chat
+        if not chat or chat.type not in ("group", "supergroup"):
+            return
+        new_status = getattr(getattr(update, "new_chat_member", None), "status", "")
+        old_status = getattr(getattr(update, "old_chat_member", None), "status", "")
+        if new_status in ("member", "administrator") and old_status in ("left", "kicked") and not is_group_licensed(chat.id):
+            DATA.setdefault("group_requests", {})[str(chat.id)] = {"title":getattr(chat,"title", ""),"requested":now_text(),"status":"pending"}; save_data()
+            try:
+                bot.send_message(chat.id, group_install_message(chat.id, getattr(chat,"title", "این گروه")), reply_markup=support_contact_markup())
+            finally:
+                try: bot.leave_chat(chat.id)
+                except Exception as leave_error: print("Leave unlicensed group error:", repr(leave_error))
+    except Exception as e:
+        print("Group license handler error:", repr(e))
 
 @bot.message_handler(content_types=["new_chat_members"], func=lambda m: m.chat.type in ("group","supergroup"))
 def welcome_new_members(message):
+    if not is_group_licensed(message.chat.id): return
     s=get_group_settings(message.chat.id)
     for member in message.new_chat_members:
         DATA["stats"]["joins"]+=1; add_log("new_member",message.chat.id,member.id,"ورود به گروه")
@@ -459,19 +587,24 @@ def welcome_new_members(message):
                 # Use the approved cyber-style card while preserving a custom welcome message if configured.
                 custom=s.get("welcome_text","سلام {name}، به گروه خوش آمدی!")
                 if custom and custom != DEFAULT_GROUP["welcome_text"]:
-                    text=esc(custom).replace("{name}",esc(member.first_name or "دوست عزیز"))
-                    bot.send_message(message.chat.id, welcome_card(message.chat.id,member)+"\n\n"+text)
-                else: bot.send_message(message.chat.id,welcome_card(message.chat.id,member))
+                    text=esc(custom).replace("{name}",f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست عزیز")}</a>')
+                    kb=types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
+                    bot.send_message(message.chat.id, welcome_card(message.chat.id,member)+"\n\n"+text, reply_markup=kb)
+                else:
+                    kb=types.InlineKeyboardMarkup()
+                    kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
+                    bot.send_message(message.chat.id,welcome_card(message.chat.id,member),reply_markup=kb)
             except Exception as e: print("Welcome error:",repr(e))
     save_data()
 
 @bot.message_handler(content_types=["left_chat_member"], func=lambda m: m.chat.type in ("group","supergroup"))
 def farewell_member(message):
+    if not is_group_licensed(message.chat.id): return
     s=get_group_settings(message.chat.id); member=message.left_chat_member
     if member and s.get("farewell_on"):
         try:
             custom = s.get("farewell_text", DEFAULT_GROUP["farewell_text"])
-            body = esc(custom).replace("{name}", esc(member.first_name or "دوست ما"))
+            body = esc(custom).replace("{name}", f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست ما")}</a>')
             bot.send_message(message.chat.id, "🌙 <b>MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━\n👋 " + body)
         except Exception as e: print("Farewell error:",repr(e))
     if member: add_log("member_left",message.chat.id,member.id,"خروج از گروه")
@@ -479,6 +612,7 @@ def farewell_member(message):
 @bot.chat_join_request_handler()
 def handle_join_request(request):
     try:
+        if not is_group_licensed(request.chat.id): return
         if get_group_settings(request.chat.id).get("join_approval"):
             bot.approve_chat_join_request(request.chat.id,request.from_user.id)
             DATA["stats"]["joins"]+=1; add_log("join_request_approved",request.chat.id,request.from_user.id,"تأیید خودکار ورود"); save_data()
@@ -520,16 +654,28 @@ def send_backup(chat_id):
     bot.send_document(chat_id,f,caption="💾 نسخه پشتیبان MASIH GUARD")
 
 def moderate_member(action,chat_id,user_id):
+    group_key=str(chat_id); member_key=str(user_id)
+    listing=DATA.setdefault("moderation_lists",{}).setdefault(group_key,{"banned":[],"muted":[]})
     if action=="warn": warn_member(chat_id,user_id,"اخطار مدیر"); return "⚠️ اخطار ثبت شد."
-    if action=="ban": bot.ban_chat_member(chat_id,user_id); add_log("manual_ban",chat_id,user_id,"مسدودسازی مدیر"); return "⛔ عضو مسدود شد."
-    if action=="unban": bot.unban_chat_member(chat_id,user_id,only_if_banned=True); return "✅ مسدودی برداشته شد."
-    if action=="kick": bot.ban_chat_member(chat_id,user_id); bot.unban_chat_member(chat_id,user_id,only_if_banned=True); return "👢 عضو اخراج شد."
+    if action=="ban":
+        bot.ban_chat_member(chat_id,user_id)
+        if member_key not in listing["banned"]: listing["banned"].append(member_key)
+        add_log("manual_ban",chat_id,user_id,"مسدودسازی مدیر"); save_data(); return "⛔ عضو مسدود شد."
+    if action=="unban":
+        bot.unban_chat_member(chat_id,user_id,only_if_banned=True)
+        listing["banned"]=[x for x in listing["banned"] if x!=member_key]; save_data(); return "✅ مسدودی برداشته شد."
+    if action=="kick":
+        bot.ban_chat_member(chat_id,user_id); bot.unban_chat_member(chat_id,user_id,only_if_banned=True)
+        add_log("manual_kick",chat_id,user_id,"اخراج مدیر"); save_data(); return "👢 عضو اخراج شد."
     if action in ("mute","unmute"):
         allowed=action=="unmute"
         perms=types.ChatPermissions(can_send_messages=allowed,can_send_audios=allowed,can_send_documents=allowed,
             can_send_photos=allowed,can_send_videos=allowed,can_send_video_notes=allowed,can_send_voice_notes=allowed,
             can_send_polls=allowed,can_send_other_messages=allowed,can_add_web_page_previews=allowed)
         bot.restrict_chat_member(chat_id,user_id,permissions=perms)
+        if allowed: listing["muted"]=[x for x in listing["muted"] if x!=member_key]
+        elif member_key not in listing["muted"]: listing["muted"].append(member_key)
+        save_data()
         return "🔊 محدودیت برداشته شد." if allowed else "🔇 عضو محدود شد."
     raise ValueError("عملیات ناشناخته است.")
 
@@ -540,6 +686,21 @@ def handle_show(uid, action):
         p=WAITING.get(uid,{}); bot.send_message(uid,esc(get_group_settings(p.get("chat_id",uid))["rules"]))
     elif action=="proxies":
         bot.send_message(uid,"\n".join(f"{i+1}. {esc(x)}" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "فهرست پروکسی‌ها خالی است.")
+    elif action=="group_licenses":
+        rows=[]
+        for gid,rec in list(DATA.setdefault("group_licenses",{}).items())[-50:]:
+            active,_=group_license_status(gid)
+            rows.append(f"{'🟢' if active else '🔴'} <code>{esc(gid)}</code> — {esc(rec.get('expires') or 'دائمی')}")
+        bot.send_message(uid,"🛡️ <b>مجوزهای گروه</b>\n"+("\n".join(rows) if rows else "هنوز گروهی فعال نشده است."))
+    elif action=="group_requests":
+        req=DATA.setdefault("group_requests",{})
+        rows=[f"• <code>{esc(gid)}</code>" for gid in req]
+        bot.send_message(uid,"📨 <b>گروه‌هایی که درخواست نصب داشته‌اند</b>\n"+("\n".join(rows[-50:]) if rows else "درخواستی ثبت نشده است."))
+    elif action in {"ban_list","mute_list","whitelist"}:
+        target=WAITING.get(uid,{}).get("chat_id")
+        kind="banned" if action=="ban_list" else "muted"
+        values=DATA.setdefault("moderation_lists",{}).get(str(target),{}).get(kind,[])
+        bot.send_message(uid,("📋 <b>فهرست اعضا</b>\n"+"\n".join(f"• <code>{esc(x)}</code>" for x in values)) if values else "فهرست ثبت‌شده توسط ربات خالی است.")
     elif action=="customers":
         rows=[f"• {esc(v.get('name'))} — <code>{esc(k)}</code>" for k,v in list(DATA["customers"].items())[:50]]
         bot.send_message(uid,"💼 <b>مشتریان</b>\n"+"\n".join(rows) if rows else "مشتری ثبت نشده است.")
@@ -621,7 +782,7 @@ def callback_handler(call):
             if data=="user:referrals": bot.answer_callback_query(call.id); bot.send_message(uid,referral_text(uid)); return
             if data=="user:transactions": bot.answer_callback_query(call.id); bot.send_message(uid,transactions_text(uid)); return
             if data=="user:font":
-                WAITING[uid]={"action":"public_font"}; bot.answer_callback_query(call.id); bot.send_message(uid,"متنی را بفرست تا در سه سبک فونت تبدیل کنم."); return
+                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 فونت کاملاً رایگان است. اول متنی را که می‌خواهی تبدیل شود بفرست."); return
             if data=="user:proxies":
                 bot.answer_callback_query(call.id)
                 bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است."); return
@@ -633,6 +794,14 @@ def callback_handler(call):
                 _,_,d,days=data.split(":"); result=buy_subscription(uid,int(d),int(days))
                 bot.answer_callback_query(call.id); bot.send_message(uid,result); return
 
+        if data.startswith("group_rules:"):
+            try: target=int(data.split(":",1)[1])
+            except ValueError: target=0
+            if target and is_group_licensed(target):
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
+            else: bot.answer_callback_query(call.id,"این گروه مجوز فعال ندارد.",show_alert=True)
+            return
         if data=="panel:back":
             history=PANEL_HISTORY.setdefault(uid,[]); section=history.pop() if history else "home"
             send_panel(chat_id,section,call.message.message_id if call.message else None,user_id=uid)
@@ -655,7 +824,7 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             if setting=="smart_security":
                 DATA["settings"]["smart_security"]=not DATA["settings"].get("smart_security",True); save_data()
-                bot.answer_callback_query(call.id,"تغییر ذخیره شد."); send_panel(chat_id,"smart",call.message.message_id if call.message else None); return
+                bot.answer_callback_query(call.id,"امنیت هوشمند: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
             WAITING[uid]={"action":"toggle_group_setting","setting":setting}
             bot.answer_callback_query(call.id)
             bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با ‎-100‎ شروع می‌شود).")
@@ -664,7 +833,7 @@ def callback_handler(call):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             action=data.split(":",1)[1]
-            global_actions={"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages"}
+            global_actions={"public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement"}
             if action in global_actions:
                 WAITING[uid]={"action":action}
                 prompts={
@@ -674,20 +843,32 @@ def callback_handler(call):
                     "daily_reward":"تعداد الماس پاداش روزانه را به‌صورت عدد ۰ تا ۱۰۰۰۰۰ بفرست.",
                     "luck_max":"حداکثر الماس شانس روزانه را به‌صورت عدد ۰ تا ۱۰۰۰ بفرست.",
                     "referral_reward":"پاداش هر زیرمجموعه معتبر را به‌صورت عدد ۰ تا ۱۰۰۰۰۰ بفرست.",
-                    "shop_packages":"بسته‌ها را این‌طور بفرست: 40=15,80=30,120=45,160=60 (الماس=روز). حداقل یک بسته لازم است."
+                    "shop_packages":"بسته‌ها را این‌طور بفرست: 40=15,80=30 (الماس=روز). حداقل یک بسته لازم است.",
+                    "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "member_info":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.",
+                    "extend_group":"شناسه گروه | تعداد روز را بفرست.",
+                    "revoke_group":"شناسه گروه را بفرست.",
+                    "announcement":"شناسه گروه | متن اطلاعیه را بفرست."
                 }
                 bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
-            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit"}
+            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command"}
             if action in group_actions:
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
             action=data.split(":",1)[1]
+            if action in {"ban_list","mute_list","whitelist"}:
+                WAITING[uid]={"action":"show_list_group","list_type":action}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست (مثلاً -1001234567890).")
+                return
             WAITING[uid]={"action":"show_"+action,"chat_id":chat_id}
             bot.answer_callback_query(call.id); handle_show(uid,action); WAITING.pop(uid,None); return
         if data=="game:guess":
@@ -709,15 +890,16 @@ def private_text_handler(message):
         bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است.")
         return
     if text.casefold()=="فونت":
-        WAITING[uid]={"action":"public_font"}; bot.send_message(uid,"متنی را بفرست تا در سه سبک فونت تبدیل کنم."); return
+        WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 فونت کاملاً رایگان است. اول متنی را که می‌خواهی تبدیل شود بفرست."); return
     if text.casefold().startswith("فونت "):
         raw=text[5:].strip()
-        bot.send_message(uid,"🔤 <b>سه سبک فونت</b>\n\n"+esc(convert_font(raw,0))+"\n\n"+esc(convert_font(raw,1))+"\n\n"+esc(convert_font(raw,2))); return
+        WAITING[uid]={"action":"public_font_name","font_text":raw}
+        bot.send_message(uid,"اسم دلخواهی را که می‌خواهی بالای خروجی فونت نمایش داده شود بفرست. فونت رایگان است."); return
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
-                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages"}
+                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
@@ -758,13 +940,32 @@ def private_text_handler(message):
             WAITING.pop(uid, None)
             bot.send_message(uid, message_text)
             return
+        if action=="show_list_group":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            list_type=pending.get("list_type")
+            if list_type=="whitelist":
+                values=get_group_settings(target).get("whitelist",[])
+                heading="📂 <b>فهرست کاربران مجاز</b>"
+            else:
+                kind="banned" if list_type=="ban_list" else "muted"
+                values=DATA.setdefault("moderation_lists",{}).get(str(target),{}).get(kind,[])
+                heading="📋 <b>فهرست ثبت‌شده توسط ربات</b>"
+            bot.send_message(uid,(heading+"\n"+"\n".join(f"• <code>{esc(x)}</code>" for x in values)) if values else "فهرست برای این گروه خالی است.")
+            WAITING.pop(uid,None); return
         if action=="select_group_for_action":
             target=int(text)
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
+        if action=="whitelist":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            values=get_group_settings(target).get("whitelist",[])
+            bot.send_message(uid,"📂 <b>کاربران مجاز</b>\n"+("\n".join(f"• <code>{esc(x)}</code>" for x in values) if values else "فهرست خالی است."))
+            WAITING.pop(uid,None); return
         if action=="toggle_group_setting":
             target=int(text)
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
@@ -772,8 +973,89 @@ def private_text_handler(message):
             if not isinstance(s.get(setting),bool): raise ValueError("این تنظیم قابل تغییر نیست.")
             s[setting]=not s[setting]; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
             bot.send_message(uid,f"✅ تنظیم {setting} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
+        elif action in ("activate_group", "extend_group", "revoke_group"):
+            parts=[x.strip() for x in text.split("|")]
+            target=int(parts[0])
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            licenses=DATA.setdefault("group_licenses", {})
+            if action == "revoke_group":
+                if len(parts) != 1: raise ValueError("فقط شناسه گروه را بفرست.")
+                licenses.pop(str(target), None)
+                add_log("group_license_revoked",target,uid,"لغو مجوز نصب")
+                save_data(); bot.send_message(uid,f"⛔ مجوز گروه <code>{target}</code> لغو شد.")
+            else:
+                if len(parts) != 2: raise ValueError("قالب: شناسه گروه | تعداد روز؛ برای دائمی عدد ۰")
+                days=int(parts[1])
+                if not 0 <= days <= 3650: raise ValueError("تعداد روز باید بین ۰ تا ۳۶۵۰ باشد.")
+                from datetime import timedelta
+                now=datetime.now()
+                old=licenses.get(str(target),{})
+                base=now
+                if action == "extend_group":
+                    try: base=max(now,datetime.strptime(old.get("expires", ""),"%Y-%m-%d %H:%M:%S"))
+                    except Exception: base=now
+                expires="" if days == 0 else (base+timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                licenses[str(target)]={"approved":True,"expires":expires,"activated_by":uid,"updated":now_text()}
+                add_log("group_license_activated" if action=="activate_group" else "group_license_extended",target,uid,f"days={days}")
+                save_data()
+                bot.send_message(uid,f"✅ مجوز گروه <code>{target}</code> فعال شد.\n⭐ پایان مجوز: {esc(expires or 'دائمی')}")
+        elif action=="announcement":
+            if "|" not in text: raise ValueError("قالب: شناسه گروه | متن اطلاعیه")
+            group_text,announcement=text.split("|",1); target=int(group_text.strip()); announcement=announcement.strip()
+            if target>=0 or not announcement: raise ValueError("شناسه گروه منفی و متن اطلاعیه الزامی است.")
+            if not is_group_licensed(target): raise PermissionError("این گروه مجوز فعال ندارد.")
+            bot.send_message(target,"📣 <b>اطلاعیهٔ مدیریت</b>\n━━━━━━━━━━━━━━\n"+esc(announcement[:3500]))
+            add_log("announcement",target,uid,announcement[:150]); save_data(); bot.send_message(uid,"✅ اطلاعیه ارسال شد.")
+        elif action=="add_custom_command":
+            if "|" not in text: raise ValueError("قالب: نام فرمان | متن پاسخ")
+            command,response=[x.strip() for x in text.split("|",1)]
+            if not re.fullmatch(r"[A-Za-z0-9_؀-ۿ-]{1,40}",command) or not response: raise ValueError("نام فرمان یا متن پاسخ معتبر نیست.")
+            get_group_settings(chat_id).setdefault("custom_commands",{})[command.lstrip("!").casefold()]=response[:2000]
+            save_data(); bot.send_message(uid,"✅ فرمان اختصاصی ذخیره شد. در گروه از !نام‌فرمان استفاده کن.")
+        elif action=="delete_custom_command":
+            key=text.lstrip("!").casefold(); existed=get_group_settings(chat_id).setdefault("custom_commands",{}).pop(key,None)
+            save_data(); bot.send_message(uid,"🗑 فرمان حذف شد." if existed is not None else "فرمان پیدا نشد.")
+        elif action in ("add_whitelist", "remove_whitelist"):
+
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target, member=int(parts[0]),int(parts[1])
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            s=get_group_settings(target); values=[str(x) for x in s.get("whitelist",[])]
+            if action=="add_whitelist":
+                if str(member) not in values: values.append(str(member))
+                s["whitelist"]=values; result="به فهرست مجاز اضافه شد."
+            else:
+                s["whitelist"]=[x for x in values if x!=str(member)]; result="از فهرست مجاز حذف شد."
+            save_data(); add_log(action,target,uid,str(member)); bot.send_message(uid,"✅ "+result)
+        elif action=="clear_warnings":
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target,member=int(parts[0]),int(parts[1]); DATA["warnings"].pop(f"{target}:{member}",None)
+            save_data(); bot.send_message(uid,"🧹 اخطارهای عضو پاک شد.")
+        elif action=="member_info":
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target,member=int(parts[0]),int(parts[1])
+            try:
+                cm=bot.get_chat_member(target,member)
+                full_name=" ".join(x for x in [getattr(cm.user,"first_name", ""),getattr(cm.user,"last_name", "")] if x)
+                status=getattr(cm,"status","نامشخص")
+                warnings=DATA["warnings"].get(f"{target}:{member}",0)
+                bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
+            except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
+        elif action == "public_font_text":
+            if len(text) > 1500: raise ValueError("متن فونت حداکثر ۱۵۰۰ نویسه باشد.")
+            WAITING[uid]={"action":"public_font_name","font_text":text}
+            bot.send_message(uid,"حالا اسم دلخواهت را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم.")
+            return
+        elif action == "public_font_name":
+            raw=pending.get("font_text", "")
+            label="" if text.casefold() in {"بدون اسم","ندارد","نه"} else text[:50]
+            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
+            bot.send_message(uid,heading+"<b>سبک ۱</b>\n<code>"+esc(convert_font(raw,0))+"</code>\n\n<b>سبک ۲</b>\n<code>"+esc(convert_font(raw,1))+"</code>\n\n<b>سبک ۳</b>\n<code>"+esc(convert_font(raw,2))+"</code>")
         elif action in ("public_font","font"):
-            bot.send_message(uid,"🔤 <b>سه سبک فونت</b>\n\n"+esc(convert_font(text,0))+"\n\n"+esc(convert_font(text,1))+"\n\n"+esc(convert_font(text,2)))
+            bot.send_message(uid,"🔤 <b>سه سبک فونت رایگان</b>\n\n"+esc(convert_font(text,0))+"\n\n"+esc(convert_font(text,1))+"\n\n"+esc(convert_font(text,2)))
         elif action in ("welcome_text","farewell_text","rules"):
             s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
         elif action=="auto_reply":
@@ -794,8 +1076,12 @@ def private_text_handler(message):
             get_group_settings(chat_id)["warn_limit"]=n; save_data(); bot.send_message(uid,"✅ سقف اخطار ذخیره شد.")
         elif action in ("warn","mute","unmute","ban","unban","kick"):
             parts=[x.strip() for x in text.split("|")]
-            target_chat,target_user=(int(chat_id),int(parts[0])) if len(parts)==1 else (int(parts[0]),int(parts[1]))
+            if len(parts) != 2:
+                raise ValueError("برای امنیت، شناسه گروه و شناسه عضو را با | بفرست. نمونه: -1001234567890 | 123456789")
+            target_chat,target_user=int(parts[0]),int(parts[1])
+            if target_chat >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
             if not is_owner(uid) and not is_group_admin(target_chat,uid): raise PermissionError("باید مدیر همان گروه باشی.")
+            if not is_group_licensed(target_chat): raise PermissionError("این گروه مجوز فعال ندارد.")
             bot.send_message(uid,moderate_member(action,target_chat,target_user))
         elif action=="add_proxy":
             if not (text.startswith("https://t.me/proxy?") or text.startswith("http://t.me/proxy?") or text.startswith("tg://proxy?")): raise ValueError("لینک معتبر t.me/proxy یا tg://proxy وارد کن.")
