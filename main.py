@@ -27,7 +27,7 @@ from telebot import types
 from flask import Flask, jsonify
 
 BOT_NAME = "مسیح گارد"
-VERSION = "5.1"
+VERSION = "5.2"
 
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
@@ -149,7 +149,29 @@ def reply_safe(message, text, **kwargs):
         return None
 
 def is_link(text):
-    return bool(text and re.search(r"(https?://|www\.|t\.me/|telegram\.me/|telegram\.dog/)", text, re.I))
+    """Detect common URLs, bare domains, and Telegram links in message text."""
+    if not text:
+        return False
+    pattern = (
+        r"(?:https?://|ftp://|www\.)\S+"
+        r"|(?:t\.me|telegram\.me|telegram\.dog)/\S*"
+        r"|(?<![@\w])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+        r"(?:com|net|org|io|co|me|info|biz|xyz|app|dev|site|online|ir|de|uk|ru|tr|рф)"
+        r"(?::\d+)?(?:[/?:#][^\s]*)?"
+    )
+    return bool(re.search(pattern, str(text), re.I))
+
+
+def message_has_link(message, text_value):
+    """Also detect clickable/hidden links represented by Telegram entities."""
+    if is_link(text_value):
+        return True
+    for attr in ("entities", "caption_entities"):
+        for entity in (getattr(message, attr, None) or []):
+            entity_type = getattr(entity, "type", "")
+            if entity_type in ("url", "text_link"):
+                return True
+    return False
 
 def add_warning(chat_id, user_id):
     key = f"{chat_id}:{user_id}"
@@ -631,13 +653,20 @@ def moderate_message(message):
     admin = is_admin(message.chat.id, message.from_user.id)
 
     if not admin:
-        if settings["anti_link"] and is_link(text_value):
+        if settings["anti_link"] and message_has_link(message, text_value):
             try:
                 bot.delete_message(message.chat.id, message.message_id)
                 bot.send_message(message.chat.id, "🔗 ارسال لینک در گروه مجاز نیست.")
                 log_action(message.chat.id, f"Link removed from {message.from_user.id}")
-            except Exception:
-                log.exception("Could not remove link.")
+            except Exception as exc:
+                log.exception("Could not remove link: %s", exc)
+                try:
+                    bot.send_message(
+                        message.chat.id,
+                        "⚠️ لینک شناسایی شد، اما حذف نشد. دسترسی حذف پیام ربات را بررسی کن."
+                    )
+                except Exception:
+                    pass
             return
         if settings["badword_filter"] and text_value:
             words = get_badwords(message.chat.id)
