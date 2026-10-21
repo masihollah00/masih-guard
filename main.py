@@ -6,11 +6,12 @@ Dependencies: pyTelegramBotAPI, Flask, requests
 
 Environment variables:
 BOT_TOKEN            Required
-OWNER_ID             Optional
+OWNER_ID             Optional (default: 8620924698)
 AI_API_KEY           Optional
-AI_BASE_URL          Optional (default OpenRouter API)
+AI_BASE_URL          Optional (default: OpenRouter-compatible API)
 AI_MODEL             Optional
 PORT                 Set by hosting provider
+DATA_FILE            Optional
 """
 
 import os
@@ -30,7 +31,7 @@ from flask import Flask, jsonify
 # ---------------- CONFIG ----------------
 
 BOT_NAME = "MASIH GUARD PRO"
-VERSION = "4.0"
+VERSION = "4.1"
 
 BOT_TOKEN = (
     os.getenv("BOT_TOKEN")
@@ -38,7 +39,10 @@ BOT_TOKEN = (
     or ""
 ).strip()
 
-OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
+try:
+    OWNER_ID = int(os.getenv("OWNER_ID", "8620924698").strip())
+except (TypeError, ValueError):
+    OWNER_ID = 8620924698
 
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
 AI_BASE_URL = os.getenv(
@@ -46,7 +50,11 @@ AI_BASE_URL = os.getenv(
 ).strip().rstrip("/")
 AI_MODEL = os.getenv("AI_MODEL", "").strip()
 
-PORT = int(os.getenv("PORT", "8080"))
+try:
+    PORT = int(os.getenv("PORT", "8080"))
+except (TypeError, ValueError):
+    PORT = 8080
+
 DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
 
 if not BOT_TOKEN:
@@ -81,11 +89,13 @@ def load_data():
     try:
         if os.path.isfile(DATA_FILE):
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                result = json.load(f)
-                if isinstance(result, dict):
-                    base = default_data()
-                    base.update(result)
-                    return base
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                base = default_data()
+                for key in base:
+                    if key in loaded:
+                        base[key] = loaded[key]
+                return base
     except Exception:
         log.exception("Could not load data file")
     return default_data()
@@ -102,18 +112,23 @@ def save_data():
         except Exception:
             log.exception("Could not save data")
 
+DEFAULT_SETTINGS = {
+    "anti_link": True,
+    "anti_spam": True,
+    "badword_filter": True,
+    "welcome_enabled": True,
+    "max_messages": 6,
+    "spam_window": 8,
+    "max_warnings": 3
+}
+
 def chat_settings(chat_id):
     key = str(chat_id)
     with lock:
-        return data["settings"].setdefault(key, {
-            "anti_link": True,
-            "anti_spam": True,
-            "badword_filter": True,
-            "welcome_enabled": True,
-            "max_messages": 6,
-            "spam_window": 8,
-            "max_warnings": 3
-        })
+        settings = data["settings"].setdefault(key, {})
+        for name, value in DEFAULT_SETTINGS.items():
+            settings.setdefault(name, value)
+        return settings
 
 def log_action(chat_id, text):
     with lock:
@@ -179,19 +194,20 @@ def get_badwords(chat_id):
 def add_warning(chat_id, user_id):
     key = f"{chat_id}:{user_id}"
     with lock:
-        data["warnings"][key] = data["warnings"].get(key, 0) + 1
+        data["warnings"][key] = int(data["warnings"].get(key, 0)) + 1
         count = data["warnings"][key]
     save_data()
     return count
 
 def warning_count(chat_id, user_id):
-    return data["warnings"].get(f"{chat_id}:{user_id}", 0)
+    with lock:
+        return int(data["warnings"].get(f"{chat_id}:{user_id}", 0))
 
 def extract_target(message):
-    if message.reply_to_message:
+    if message.reply_to_message and message.reply_to_message.from_user:
         return message.reply_to_message.from_user
     parts = (message.text or "").split()
-    if len(parts) > 1 and parts[1].isdigit():
+    if len(parts) > 1 and parts[1].lstrip("-").isdigit():
         try:
             return bot.get_chat_member(
                 message.chat.id, int(parts[1])
@@ -228,7 +244,7 @@ def ai_answer(question, chat_title=""):
     if not AI_API_KEY or not AI_MODEL:
         return (
             "🤖 هوش مصنوعی هنوز تنظیم نشده است.\n"
-            "مدیر باید AI_API_KEY و AI_MODEL سازگار را در Environment هاست تنظیم کند."
+            "در Environment هاست، AI_API_KEY و AI_MODEL سازگار را تنظیم کن."
         )
 
     url = AI_BASE_URL + "/chat/completions"
@@ -245,10 +261,7 @@ def ai_answer(question, chat_title=""):
             },
             {
                 "role": "user",
-                "content": (
-                    f"گروه: {chat_title}\n"
-                    f"سؤال: {question[:3500]}"
-                )
+                "content": f"گروه: {chat_title}\nسؤال: {question[:3500]}"
             }
         ],
         "temperature": 0.7,
@@ -286,11 +299,12 @@ def ai_answer(question, chat_title=""):
         log.exception("AI request failed")
         return "⚠️ اتصال به هوش مصنوعی ناموفق بود."
 
-# ---------------- COMMANDS ----------------
+# ---------------- BASIC COMMANDS ----------------
 
 @bot.message_handler(commands=["start", "help"])
 def start_command(message):
-    text = (
+    reply_safe(
+        message,
         f"🛡 {BOT_NAME} v{VERSION}\n\n"
         "ربات مدیریت گروه فعال است.\n\n"
         "دستورات:\n"
@@ -299,15 +313,14 @@ def start_command(message):
         "/panel — پنل مدیریت\n"
         "/rules — راهنمای دستورات\n"
         "/ai سؤال — پرسیدن از هوش مصنوعی\n\n"
-        "دستورات مدیریتی در گروه:\n"
+        "مدیریت:\n"
         "/warn /warnings /unwarn\n"
         "/mute /unmute /ban /unban /kick\n"
-        "/purge /addbadword /delbadword\n"
+        "/purge /addbadword /delbadword /badwords\n"
         "/antilink_on /antilink_off\n"
         "/antispam_on /antispam_off\n"
         "/welcome_on /welcome_off"
     )
-    reply_safe(message, text)
 
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
@@ -318,8 +331,7 @@ def id_command(message):
     user = message.from_user
     reply_safe(
         message,
-        f"👤 آیدی شما: {user.id}\n"
-        f"💬 آیدی گفتگو: {message.chat.id}"
+        f"👤 آیدی شما: {user.id}\n💬 آیدی گفتگو: {message.chat.id}"
     )
 
 @bot.message_handler(commands=["rules"])
@@ -328,8 +340,8 @@ def rules_command(message):
         message,
         "📘 راهنمای مدیران\n"
         "برای مدیریت کاربر، روی پیام او ریپلای کن و دستور را بفرست.\n"
-        "برای مثال: /warn\n"
-        "برای حذف چند پیام: روی پیام آخر ریپلای کن و /purge بزن.\n"
+        "مثال: /warn\n"
+        "برای پاک‌کردن پیام‌ها، روی پیام آخر ریپلای کن و /purge بزن.\n"
         "برای پرسیدن سؤال: /ai سؤال خودت"
     )
 
@@ -350,21 +362,16 @@ def ai_command(message):
     answer = ai_answer(question, getattr(message.chat, "title", "") or "")
     try:
         if status:
-            bot.edit_message_text(
-                answer, message.chat.id, status.message_id
-            )
+            bot.edit_message_text(answer, message.chat.id, status.message_id)
         else:
             reply_safe(message, answer)
     except Exception:
         reply_safe(message, answer)
 
-@bot.message_handler(commands=["panel"])
-def panel_command(message):
-    if not is_admin(message.chat.id, message.from_user.id):
-        reply_safe(message, "⛔ پنل فقط برای مدیران گروه است.")
-        return
+# ---------------- ADMIN PANEL ----------------
 
-    settings = chat_settings(message.chat.id)
+def build_panel_markup(chat_id):
+    settings = chat_settings(chat_id)
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(
@@ -384,21 +391,33 @@ def panel_command(message):
             callback_data="toggle:welcome_enabled"
         )
     )
+    return markup
+
+@bot.message_handler(commands=["panel"])
+def panel_command(message):
+    if not is_admin(message.chat.id, message.from_user.id):
+        reply_safe(message, "⛔ پنل فقط برای مدیران گروه است.")
+        return
     bot.send_message(
         message.chat.id,
         "⚙️ پنل تنظیمات MASIH GUARD PRO",
-        reply_markup=markup
+        reply_markup=build_panel_markup(message.chat.id)
     )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("toggle:"))
+@bot.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith("toggle:")))
 def panel_callback(call):
     try:
-        if not is_admin(call.message.chat.id, call.from_user.id):
+        if not call.message:
+            bot.answer_callback_query(call.id, "پیام پنل پیدا نشد.")
+            return
+        chat_id = call.message.chat.id
+        if not is_admin(chat_id, call.from_user.id):
             bot.answer_callback_query(
                 call.id, "فقط مدیر گروه می‌تواند تنظیمات را تغییر دهد.",
                 show_alert=True
             )
             return
+
         key = call.data.split(":", 1)[1]
         allowed = {
             "anti_link", "anti_spam",
@@ -407,15 +426,24 @@ def panel_callback(call):
         if key not in allowed:
             bot.answer_callback_query(call.id, "تنظیم نامعتبر است.")
             return
-        settings = chat_settings(call.message.chat.id)
+
+        settings = chat_settings(chat_id)
         settings[key] = not settings[key]
         save_data()
         bot.answer_callback_query(call.id, "تنظیمات ذخیره شد.")
-        panel_command(call.message)
+        bot.edit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            reply_markup=build_panel_markup(chat_id)
+        )
     except Exception:
         log.exception("Panel callback failed")
+        try:
+            bot.answer_callback_query(call.id, "خطا در تغییر تنظیمات.")
+        except Exception:
+            pass
 
-# ---------------- ADMIN COMMANDS ----------------
+# ---------------- MODERATION COMMANDS ----------------
 
 @bot.message_handler(commands=["warn"])
 def warn_command(message):
@@ -424,10 +452,7 @@ def warn_command(message):
         return
     count = add_warning(message.chat.id, target_id)
     max_warnings = chat_settings(message.chat.id)["max_warnings"]
-    reply_safe(
-        message,
-        f"⚠️ اخطار ثبت شد.\nتعداد اخطار: {count}/{max_warnings}"
-    )
+    reply_safe(message, f"⚠️ اخطار ثبت شد.\nتعداد اخطار: {count}/{max_warnings}")
     if count >= max_warnings:
         try:
             bot.ban_chat_member(message.chat.id, target_id)
@@ -439,18 +464,15 @@ def warn_command(message):
 @bot.message_handler(commands=["warnings"])
 def warnings_command(message):
     target_id = target_user_id(message) or message.from_user.id
-    reply_safe(
-        message,
-        f"⚠️ تعداد اخطارها: {warning_count(message.chat.id, target_id)}"
-    )
+    reply_safe(message, f"⚠️ تعداد اخطارها: {warning_count(message.chat.id, target_id)}")
 
 @bot.message_handler(commands=["unwarn"])
 def unwarn_command(message):
     target_id = target_user_id(message)
     if not ensure_manageable(message, target_id):
         return
-    key = f"{message.chat.id}:{target_id}"
-    data["warnings"][key] = 0
+    with lock:
+        data["warnings"][f"{message.chat.id}:{target_id}"] = 0
     save_data()
     reply_safe(message, "✅ اخطارهای این کاربر پاک شد.")
 
@@ -460,11 +482,10 @@ def mute_command(message):
     if not ensure_manageable(message, target_id):
         return
     try:
-        until = int(time.time()) + 3600
         bot.restrict_chat_member(
             message.chat.id,
             target_id,
-            until_date=until,
+            until_date=int(time.time()) + 3600,
             permissions=types.ChatPermissions(
                 can_send_messages=False,
                 can_send_audios=False,
@@ -508,6 +529,7 @@ def unmute_command(message):
         )
         reply_safe(message, "🔊 سکوت کاربر برداشته شد.")
     except Exception:
+        log.exception("Unmute failed")
         reply_safe(message, "⚠️ نتوانستم سکوت را بردارم.")
 
 @bot.message_handler(commands=["ban"])
@@ -520,6 +542,7 @@ def ban_command(message):
         reply_safe(message, "⛔ کاربر مسدود شد.")
         log_action(message.chat.id, f"Ban {target_id}")
     except Exception:
+        log.exception("Ban failed")
         reply_safe(message, "⚠️ مسدودسازی ناموفق بود.")
 
 @bot.message_handler(commands=["unban"])
@@ -528,13 +551,14 @@ def unban_command(message):
         reply_safe(message, "⛔ فقط مدیر گروه.")
         return
     parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].isdigit():
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
         reply_safe(message, "استفاده: /unban آیدی_عددی")
         return
     try:
         bot.unban_chat_member(message.chat.id, int(parts[1]))
         reply_safe(message, "✅ مسدودیت برداشته شد.")
     except Exception:
+        log.exception("Unban failed")
         reply_safe(message, "⚠️ رفع مسدودیت ناموفق بود.")
 
 @bot.message_handler(commands=["kick"])
@@ -547,6 +571,7 @@ def kick_command(message):
         bot.unban_chat_member(message.chat.id, target_id)
         reply_safe(message, "👢 کاربر از گروه اخراج شد.")
     except Exception:
+        log.exception("Kick failed")
         reply_safe(message, "⚠️ اخراج کاربر ناموفق بود.")
 
 @bot.message_handler(commands=["purge"])
@@ -576,7 +601,7 @@ def purge_command(message):
             f"🧹 پاک‌سازی انجام شد. تعداد پیام‌های پاک‌شده: {deleted}"
         )
     except Exception:
-        pass
+        log.exception("Could not send purge summary")
 
 # ---------------- FILTER SETTINGS ----------------
 
@@ -621,10 +646,11 @@ def addbadword_command(message):
     if not word:
         reply_safe(message, "استفاده: /addbadword کلمه")
         return
+    word = word[:100]
     with lock:
         words = data["badwords"].setdefault(str(message.chat.id), [])
         if word.casefold() not in [w.casefold() for w in words]:
-            words.append(word[:100])
+            words.append(word)
     save_data()
     reply_safe(message, "✅ کلمه به فیلتر اضافه شد.")
 
@@ -654,7 +680,8 @@ def badwords_command(message):
     words = get_badwords(message.chat.id)
     reply_safe(
         message,
-        "📃 کلمات فیلتر:\n" + ("\n".join(words) if words else "هنوز کلمه‌ای ثبت نشده.")
+        "📃 کلمات فیلتر:\n" +
+        ("\n".join(words) if words else "هنوز کلمه‌ای ثبت نشده.")
     )
 
 # ---------------- NEW MEMBERS ----------------
@@ -680,14 +707,15 @@ def welcome_new_members(message):
 # ---------------- MESSAGE MODERATION ----------------
 
 @bot.message_handler(
-    func=lambda m: bool(m.text or m.caption),
-    content_types=["text", "photo", "video", "document",
-                   "audio", "voice", "animation", "sticker"]
+    func=lambda m: True,
+    content_types=[
+        "text", "photo", "video", "document", "audio",
+        "voice", "animation", "sticker", "video_note",
+        "contact", "location", "venue", "poll"
+    ]
 )
 def moderate_message(message):
-    if not message.from_user:
-        return
-    if message.from_user.is_bot:
+    if not message.from_user or message.from_user.is_bot:
         return
     if message.chat.type not in ("group", "supergroup"):
         return
@@ -695,6 +723,7 @@ def moderate_message(message):
     text_value = (message.text or message.caption or "").strip()
     settings = chat_settings(message.chat.id)
 
+    # Admins are exempt from moderation filters.
     if is_admin(message.chat.id, message.from_user.id):
         return
 
@@ -712,7 +741,7 @@ def moderate_message(message):
 
     if settings["badword_filter"] and text_value:
         words = get_badwords(message.chat.id)
-        if any(w.casefold() in text_value.casefold() for w in words):
+        if any(w and w.casefold() in text_value.casefold() for w in words):
             try:
                 bot.delete_message(message.chat.id, message.message_id)
                 log_action(message.chat.id, f"Bad word removed from {message.from_user.id}")
@@ -725,11 +754,11 @@ def moderate_message(message):
         key = (message.chat.id, message.from_user.id)
         history = spam_history[key]
         history.append(now)
-        window = settings["spam_window"]
+        window = int(settings["spam_window"])
         while history and now - history[0] > window:
             history.popleft()
 
-        if len(history) > settings["max_messages"]:
+        if len(history) > int(settings["max_messages"]):
             try:
                 bot.delete_message(message.chat.id, message.message_id)
                 bot.restrict_chat_member(
@@ -755,7 +784,7 @@ def run_bot_forever():
         try:
             log.info("Starting %s v%s", BOT_NAME, VERSION)
             try:
-                # Compatible with pyTelegramBotAPI versions
+                # Do not pass drop_pending_updates: older library versions reject it.
                 bot.remove_webhook()
             except Exception:
                 log.exception("Could not remove webhook; continuing")
@@ -780,6 +809,5 @@ def start_flask():
     app.run(host="0.0.0.0", port=PORT, use_reloader=False)
 
 if __name__ == "__main__":
-    thread = threading.Thread(target=start_flask, daemon=True)
-    thread.start()
+    threading.Thread(target=start_flask, daemon=True).start()
     run_bot_forever()
