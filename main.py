@@ -149,17 +149,31 @@ def target_from_message(message):
 
 def main_panel():
     kb = types.InlineKeyboardMarkup(row_width=2)
-    # Telegram controls actual button colors; rainbow emojis provide the seven-color look.
-    kb.add(
-        types.InlineKeyboardButton("🔴 مدیریت", callback_data="panel:manage"),
-        types.InlineKeyboardButton("🟠 امنیت", callback_data="panel:security"),
-        types.InlineKeyboardButton("🟡 قوانین", callback_data="panel:rules"),
-        types.InlineKeyboardButton("🟢 راهنما", callback_data="panel:help"),
-        types.InlineKeyboardButton("🔵 وضعیت", callback_data="panel:status"),
-        types.InlineKeyboardButton("🟣 سازنده", callback_data="panel:creator"),
-        types.InlineKeyboardButton("🌈 پنل هفت‌رنگ", callback_data="panel:rainbow"),
-        types.InlineKeyboardButton("📢 کانال", url=CHANNEL_URL),
+
+    kb.row(
+        types.InlineKeyboardButton("🟢 قفل‌های اصلی", callback_data="panel:locks"),
+        types.InlineKeyboardButton("🔵 قفل‌های رسانه", callback_data="panel:media")
     )
+    kb.row(
+        types.InlineKeyboardButton("🟣 حالت‌های قفل", callback_data="panel:lockmodes"),
+        types.InlineKeyboardButton("🟡 حالت‌های گروه", callback_data="panel:groupmodes")
+    )
+    kb.row(
+        types.InlineKeyboardButton("🔴 مدیریت گروه", callback_data="panel:manage"),
+        types.InlineKeyboardButton("🟠 لیست‌ها", callback_data="panel:lists")
+    )
+    kb.row(
+        types.InlineKeyboardButton("🌈 تنظیمات پیشرفته", callback_data="panel:advanced"),
+        types.InlineKeyboardButton("💎 راهنما", callback_data="panel:help")
+    )
+    kb.row(
+        types.InlineKeyboardButton("📊 وضعیت ربات", callback_data="panel:status"),
+        types.InlineKeyboardButton("👑 سازنده", callback_data="panel:creator")
+    )
+    kb.row(
+        types.InlineKeyboardButton("❌ بستن پنل", callback_data="panel:close")
+    )
+
     return kb
 
 
@@ -167,14 +181,17 @@ def panel_text():
     return (
         "🌈 <b>MASIH GUARD | نسخه 30.0</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "🛡️ ربات مدیریت و امنیت گروه\n"
-        "🔴 مدیریت  🟠 امنیت  🟡 قوانین\n"
-        "🟢 راهنما  🔵 وضعیت  🟣 سازنده\n"
+        "🛡️ پنل مدیریت و امنیت گروه\n\n"
+        "🟢 قفل‌های اصلی  |  🔵 قفل‌های رسانه\n"
+        "🟣 حالت‌های قفل  |  🟡 حالت‌های گروه\n"
+        "🔴 مدیریت گروه  |  🟠 لیست‌ها\n"
+        "🌈 تنظیمات پیشرفته  |  💎 راهنما\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "✦ سازنده: <b>Masih Hackring</b>\n"
-        "برای فونت هر اسم یا متنی، بنویس: <code>فونت اسم دلخواه</code>\n"
-        "برای پروکسی، بنویس: <code>پروکسی</code>"
+        "👑 سازنده: <b>Masih Hackring</b>\n"
+        "✦ برای فونت: <code>فونت Masih</code>\n"
+        "✦ برای پروکسی: <code>پروکسی</code>"
     )
+
 
 
 def send_long(chat_id, text, reply_to=None):
