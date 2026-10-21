@@ -252,7 +252,7 @@ def ai_answer(question, chat_title=""):
                 "Authorization": "Bearer " + AI_API_KEY,
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://masih-guard.example",
-                "X-OpenRouter-Title": BOT_NAME
+                "X-OpenRouter-Title": "Masih Guard"
             },
             json=payload,
             timeout=(10, 45)
