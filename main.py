@@ -39,6 +39,7 @@ DEFAULT_GROUP = {
     "welcome_text": "سلام {name}، به گروه خوش آمدی!", "farewell_text": "خداحافظ {name}",
     "auto_replies": {}, "custom_commands": {}, "phone_filter": False,
     "smart_security": True, "quiet_hours_on": False, "quiet_start": "23:00", "quiet_end": "07:00",
+    "flood_threshold": 7, "flood_window_seconds": 8,
     "welcome_image": "", "welcome_delete_seconds": 0
 }
 DEFAULT_DATA = {
@@ -54,7 +55,7 @@ DEFAULT_DATA = {
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
     "subscription_requests": {}, "payout_requests": {}, "pending_deposits": {},
-    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
+    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {}, "unban_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}
 }
 
@@ -80,25 +81,19 @@ def load_data():
     data.setdefault("moderation_lists", {})
     data.setdefault("message_history", {})
     data.setdefault("group_requests", {})
+    data.setdefault("unban_requests", {})
     data.setdefault("group_stats", {})
     data.setdefault("active_members", {})
     data.setdefault("manager_roles", {})
     data.setdefault("subscription_requests", {})
     data.setdefault("payout_requests", {})
-    # Migration away from the retired diamond economy. Old diamond balances and
-    # histories are deliberately discarded instead of being misrepresented as Toman.
+    # Non-destructive compatibility: never erase old balances, transaction rows,
+    # or legacy user fields during startup. Any future migration must be backed up
+    # and explicitly approved before data is rewritten.
     if isinstance(data.get("users"), dict):
         for _user in data["users"].values():
             if isinstance(_user, dict):
-                _user.pop("diamonds", None)
                 _user.setdefault("wallet_toman", 0)
-                _user.pop("last_daily", None)
-                _user.pop("last_luck", None)
-    if isinstance(data.get("transactions"), dict):
-        # Clear only legacy diamond rows once; preserve new Toman transaction history.
-        for _key, _rows in list(data["transactions"].items()):
-            if isinstance(_rows, list) and any(isinstance(_row, dict) and "amount_toman" not in _row for _row in _rows):
-                data["transactions"][_key] = []
     for k, v in DEFAULT_DATA.items():
         if isinstance(v, dict) and not isinstance(data.get(k), dict): data[k] = clone(v)
         if isinstance(v, list) and not isinstance(data.get(k), list): data[k] = clone(v)
@@ -128,8 +123,7 @@ def ensure_user(uid, username="", first_name=""):
     key = str(int(uid))
     with LOCK:
         user = DATA["users"].setdefault(key, {"wallet_toman": 0, "username": "", "first_name": "", "joined": now_text()})
-        # Remove legacy currency fields on every access as a final migration guard.
-        user.pop("diamonds", None)
+        # Keep legacy fields intact; do not destroy user data during normal access.
         user.setdefault("wallet_toman", 0)
         if username: user["username"] = username
         if first_name: user["first_name"] = first_name
@@ -196,10 +190,9 @@ def group_install_message(chat_id, title="این گروه"):
 def bot_settings():
     """Return current Toman settings; legacy diamond settings are removed."""
     settings = DATA.setdefault("bot_settings", clone(DEFAULT_DATA["bot_settings"]))
-    settings.pop("daily_reward", None); settings.pop("luck_max", None)
-    settings.pop("referral_reward", None); settings.pop("shop_packages", None)
+    # Keep older configuration keys for backward compatibility; do not delete or
+    # overwrite stored package settings without an approved migration.
     settings.setdefault("referral_reward_toman", 5000)
-    settings["subscription_packages"] = [[30, 40000], [60, 80000], [90, 120000]]
     for key, value in DEFAULT_DATA["bot_settings"].items(): settings.setdefault(key, clone(value))
     return settings
 
@@ -737,10 +730,22 @@ def process_group_security(message):
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
     elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
-    elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
+    elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])):
+        reason="استفاده از کلمه ممنوع"
+        try:
+            bot.send_message(OWNER_ID,
+                "🚨 <b>هشدار کلمه ممنوع در گروه</b>\n"
+                f"گروه: <code>{chat.id}</code>\nکاربر: <code>{user.id}</code>\n"
+                f"پیام: {esc(text[:500])}")
+        except Exception as alert_error:
+            print("Sensitive-word alert error:", repr(alert_error))
     if not reason and text and s.get("anti_repeat") and normalize_security_text(prev.get("normalized", prev.get("text", ""))) == normalize_security_text(text) and normalize_security_text(text) and now-prev.get("time",0)<30: reason="پیام تکراری یا با تغییرات جزئی"
-    times=[t for t in prev.get("times",[]) if now-t<8]; times.append(now)
-    if not reason and s.get("anti_spam") and len(times)>=7: reason="ارسال پیام‌های پرتعداد"
+    try: flood_window = max(2, min(60, int(s.get("flood_window_seconds", 8))))
+    except (TypeError, ValueError): flood_window = 8
+    try: flood_threshold = max(3, min(30, int(s.get("flood_threshold", 7))))
+    except (TypeError, ValueError): flood_threshold = 7
+    times=[t for t in prev.get("times",[]) if now-t<flood_window]; times.append(now)
+    if not reason and s.get("anti_spam") and len(times)>=flood_threshold: reason="ارسال پیام‌های پرتعداد"
     DATA["seen"][key]={"text":text,"normalized":normalize_security_text(text),"time":now,"times":[] if reason=="ارسال پیام‌های پرتعداد" else times}
     if reason:
         if safe_delete(message):
@@ -1569,14 +1574,25 @@ def start_command(message):
         else:
             bot.send_message(message.chat.id,public_features_text(),reply_markup=public_keyboard())
         return
-    if not is_owner(uid):
-        bot.reply_to(message,"پنل مدیریت فقط در اختیار مالک ربات است؛ برای فهرست امکانات به گفت‌وگوی خصوصی ربات برو.")
-        return
+    guide = (
+        "🛡️ <b>راهنمای امنیت و تنظیمات مسیح گارد</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "• ضدلینک و ضدتبلیغ: کنترل لینک‌ها و پیام‌های تبلیغاتی\n"
+        "• ضداسپم و ضدتکرار: محدودکردن پیام‌های پرتعداد و تکراری\n"
+        "• قفل رسانه: کنترل عکس، فیلم، فایل، استیکر و پیام صوتی\n"
+        "• کلمات ممنوع و فهرست مجاز: مدیریت محتوای گروه\n"
+        "• خوشامدگویی، خداحافظی، قوانین و تأیید ورود\n"
+        "• اخطارها، سکوت، اخراج، مسدودسازی و گزارش تخلف\n\n"
+        "📌 برای فعال‌سازی امکانات مدیریتی، ربات باید مدیر گروه باشد و گروه مجوز فعال داشته باشد.\n"
+        "⚙️ تنظیمات مدیریتی را مالک ربات از پنل خصوصی مدیریت می‌کند؛ این پیام فقط راهنماست."
+    )
     try:
-        bot.send_message(uid, "🔐 پنل مدیریت در گروه نمایش داده نمی‌شود؛ پنل خصوصی برایت باز شد.")
-    except Exception:
-        pass
-    send_panel(uid,user_id=uid)
+        bot.send_message(message.chat.id, guide, reply_to_message_id=message.message_id)
+    except Exception as e:
+        print("Group start guide error:", repr(e))
+    if is_owner(uid):
+        try: send_panel(uid, user_id=uid)
+        except Exception: pass
 
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
@@ -1927,6 +1943,33 @@ def callback_handler(call):
 def private_text_handler(message):
     uid=message.from_user.id; text=(message.text or "").strip()
     ensure_user(uid,message.from_user.username,message.from_user.first_name)
+    if text.startswith("/unbanrequest"):
+        parts = text.split(maxsplit=2)
+        if len(parts) < 2:
+            bot.reply_to(message, "قالب درخواست: /unbanrequest شناسه_گروه دلیل_درخواست\nشناسه گروه را از مدیر یا پیام /id بگیر.")
+            return
+        try:
+            group_id = int(parts[1])
+        except ValueError:
+            bot.reply_to(message, "شناسه گروه باید عددی باشد؛ نمونه: /unbanrequest -1001234567890 دلیل")
+            return
+        reason = parts[2].strip()[:500] if len(parts) > 2 else "درخواست بررسی رفع مسدودی"
+        req_id = str(int(time.time() * 1000)) + "_" + str(uid)
+        request = {"id": req_id, "user_id": uid, "group_id": group_id, "reason": reason,
+                   "status": "pending", "time": now_text()}
+        DATA.setdefault("unban_requests", {})[req_id] = request
+        add_log("unban_request", group_id, uid, reason[:200])
+        save_data()
+        bot.reply_to(message, "📨 درخواستت ثبت شد و برای مالک ربات فرستاده شد. ثبت درخواست به‌معنی تأیید رفع مسدودی نیست.")
+        try:
+            bot.send_message(OWNER_ID,
+                "📨 <b>درخواست رفع مسدودی</b>\n"
+                f"شناسه درخواست: <code>{esc(req_id)}</code>\n"
+                f"کاربر: <code>{uid}</code>\nگروه: <code>{group_id}</code>\n"
+                f"دلیل: {esc(reason)}\nزمان: {esc(request['time'])}")
+        except Exception as e:
+            print("Unban request owner notice error:", repr(e))
+        return
     if text.startswith("/"): return
     # AI trigger requested by the owner: only «هوش» or a reply to the bot activates it.
     normalized_private = text.replace("ي", "ی").replace("ك", "ک").strip().casefold()
