@@ -15,6 +15,7 @@ AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/
 AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o-mini").strip()
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://neon-portfolio-7vhj.onrender.com").strip()
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33").strip()
+OWNER_CONTACT_URL = os.getenv("OWNER_CONTACT_URL", "https://t.me/Ma3ih01").strip()
 BRAND, VERSION = "MASIH GUARD", "S1000+"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است؛ آن را در Environment هاست قرار بده.")
@@ -46,7 +47,7 @@ DEFAULT_DATA = {
         "public_features": "", "channel_url": "https://t.me/IRHACK_APP33",
         "website_url": "https://neon-portfolio-7vhj.onrender.com",
         "referral_reward_toman": 5000,
-        "subscription_packages": [[30, 40000], [60, 80000], [90, 135000]]
+        "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
     "subscription_requests": {}, "payout_requests": {},
@@ -190,7 +191,7 @@ def bot_settings():
     settings.pop("daily_reward", None); settings.pop("luck_max", None)
     settings.pop("referral_reward", None); settings.pop("shop_packages", None)
     settings.setdefault("referral_reward_toman", 5000)
-    settings["subscription_packages"] = [[30, 40000], [60, 80000], [90, 135000]]
+    settings["subscription_packages"] = [[30, 40000], [60, 80000], [90, 120000]]
     for key, value in DEFAULT_DATA["bot_settings"].items(): settings.setdefault(key, clone(value))
     return settings
 
@@ -250,7 +251,8 @@ def public_keyboard():
            types.InlineKeyboardButton("🌐 پروکسی‌ها", callback_data="user:proxies"))
     kb.row(types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"),
            types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
-    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=configured_url("channel_url", CHANNEL_URL)),
+    kb.row(types.InlineKeyboardButton("👑 پنل مدیریت (نمایش برای همه)", callback_data="panel:open"))
+    kb.row(types.InlineKeyboardButton("👨‍💻 پیام به سازنده", url=OWNER_CONTACT_URL),
            types.InlineKeyboardButton("🌐 وب‌سایت", url=configured_url("website_url", WEBSITE_URL)))
     return kb
 
@@ -265,7 +267,7 @@ def main_keyboard():
                                                    callback_data='panel:'+key))
         kb.row(*row)
     kb.row(types.InlineKeyboardButton("🌐 وب‌سایت رسمی", url=configured_url("website_url", WEBSITE_URL)))
-    kb.row(types.InlineKeyboardButton("📢 کانال رسمی", url=configured_url("channel_url", CHANNEL_URL)))
+    kb.row(types.InlineKeyboardButton("👨‍💻 پیام به سازنده", url=OWNER_CONTACT_URL))
     return kb
 
 def section_keyboard(section):
@@ -305,11 +307,10 @@ def section_keyboard(section):
     return kb
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
-    # The management panel and all its replies must remain in the owner's private chat.
-    if user_id is not None and (not is_owner(user_id) or int(chat_id) != int(user_id)):
-        if user_id:
-            try: bot.send_message(user_id, "🔐 پنل مدیریت فقط در گفت‌وگوی خصوصی مالک باز می‌شود. برای بازکردن آن /panel را در خصوصی ربات بفرست.")
-            except Exception: pass
+    # The menu can be viewed by anyone in private chat; every privileged callback is owner-gated.
+    if user_id is not None and int(chat_id) != int(user_id):
+        try: bot.send_message(user_id, "🔐 این پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.")
+        except Exception: pass
         return
     if user_id is not None: PANEL_CURRENT[user_id] = section
     if section == "home":
@@ -435,23 +436,41 @@ def referral_text(uid):
             f"👥 دعوت‌های ثبت‌شده: {count}\n💳 پاداش هر دعوت معتبر: {reward:,} تومان\n"
             "⚠️ برای ثبت و واریز پاداش، کاربر جدید باید از لینک شما وارد گفت‌وگوی خصوصی ربات شود و Start را بزند. هر کاربر فقط یک‌بار حساب می‌شود.")
 
-SUBSCRIPTION_PACKAGES = ((30, 40000), (60, 80000), (90, 135000))
+SUBSCRIPTION_PACKAGES = ((30, 40000), (60, 80000), (90, 120000))
+
+def subscription_support_keyboard():
+    """Official purchase support links; bank details are never invented by the bot."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("👨‍💻 دریافت اطلاعات پرداخت از سازنده", url=OWNER_CONTACT_URL))
+    kb.add(types.InlineKeyboardButton("🛒 برگشت به بسته‌های اشتراک", callback_data="user:shop"))
+    return kb
 
 def shop_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
+    labels = {30: "🥉 اشتراک ۱ ماهه — 40,000 تومان", 60: "🥈 اشتراک ۲ ماهه — 80,000 تومان", 90: "🥇 اشتراک ۳ ماهه — 120,000 تومان"}
     for days, price in SUBSCRIPTION_PACKAGES:
-        kb.add(types.InlineKeyboardButton(f"⭐ {days} روز — {price:,} تومان", callback_data=f"shop:request:{days}:{price}"))
+        kb.add(types.InlineKeyboardButton(labels.get(days, f"⭐ {days} روز — {price:,} تومان"), callback_data=f"shop:request:{days}:{price}"))
+    kb.add(types.InlineKeyboardButton("👨‍💻 پیام به سازنده / اطلاعات پرداخت", url=OWNER_CONTACT_URL))
     kb.add(types.InlineKeyboardButton("⬅️ منوی کاربر", callback_data="user:home"))
     return kb
 
 def shop_text(uid):
     sub = DATA.setdefault("subscriptions", {}).get(str(uid), {})
-    expiry = sub.get("expires", "اشتراکی فعال نیست")
+    expiry = sub.get("expires", "اشتراک فعال نیست")
     package_text = "\n".join(f"⭐ {days} روز: {price:,} تومان" for days, price in SUBSCRIPTION_PACKAGES)
-    return ("🛒 <b>اشتراک MASIH GUARD</b>\n━━━━━━━━━━━━━━\n"
-            f"{package_text}\n\n💳 موجودی کیف پول: {wallet(uid):,} تومان\n"
-            f"⭐ پایان اشتراک فعلی: {esc(expiry)}\n\n"
-            "با انتخاب بسته، درخواست برای مالک ارسال می‌شود. اشتراک فقط پس از بررسی و تأیید مالک فعال خواهد شد. اطلاعات پرداخت را از مالک دریافت کن.")
+    return ("🌈 <b>خرید اشتراک MASIH GUARD S1000+</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ <b>بسته‌های اشتراک</b>\n"
+            f"{package_text}\n\n"
+            f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>\n"
+            f"📅 پایان اشتراک فعلی: <b>{esc(expiry)}</b>\n\n"
+            "🧾 <b>روش خرید و فعال‌سازی</b>\n"
+            "۱) بستهٔ موردنظرت را انتخاب کن تا درخواست خرید ثبت شود.\n"
+            "۲) برای دریافت شماره کارت و اطلاعات دقیق پرداخت، از دکمهٔ «پیام به سازنده» در همین بخش به پیوی سازنده پیام بده.\n"
+            "۳) مبلغ دقیق همان بسته را انتقال بده و رسید یا شمارهٔ پیگیری را فقط برای سازنده بفرست.\n"
+            "۴) اشتراک پس از بررسی و تأیید پرداخت توسط مالک فعال می‌شود؛ ثبت درخواست به‌تنهایی به معنی پرداخت یا فعال‌شدن اشتراک نیست.\n\n"
+            "🔒 برای امنیت، رمز کارت، رمز پویا یا اطلاعات ورود بانکی را برای هیچ‌کس ارسال نکن.\n"
+            "👨‍💻 برای هماهنگی پرداخت فقط از دکمهٔ پیام به سازنده استفاده کن.")
 
 def public_wallet(uid):
     ensure_user(uid)
@@ -495,7 +514,12 @@ def request_subscription(uid, days, price):
         save_data()
         return "⚠️ درخواست ذخیره شد، اما پیام مستقیم به مالک نرسید. از بخش «درخواست‌های اشتراک» پنل مالک هم قابل بررسی است."
     add_log("subscription_requested", "", uid, f"request={rid}; days={days}; price_toman={price}")
-    return f"📨 درخواست اشتراک {days} روزه با مبلغ {price:,} تومان برای مالک ارسال شد.\nتا بررسی پرداخت و تأیید مالک، اشتراک فعال نمی‌شود.\nشناسه درخواست: <code>{esc(rid)}</code>"
+    return (f"🧾 <b>درخواست خرید ثبت شد</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"📦 بسته: {days} روز\n💳 مبلغ قابل پرداخت: <b>{price:,} تومان</b>\n"
+            f"🆔 شناسه درخواست: <code>{esc(rid)}</code>\n\n"
+            "👨‍💻 برای دریافت اطلاعات بانکی معتبر، به پیوی سازنده پیام بده؛ شماره کارت را حدس نمی‌زنیم و داخل ربات نمایش نمی‌دهیم.\n"
+            "پس از انتقال وجه، رسید یا شماره پیگیری را به سازنده ارسال کن. مالک بعد از بررسی پرداخت درخواست را تأیید می‌کند و سپس اشتراک فعال می‌شود.\n"
+            "⚠️ تا قبل از تأیید مالک، اشتراک فعال نیست.")
 
 def decide_subscription_request(rid, approve, owner_uid):
     if not is_owner(owner_uid): return "⛔ فقط مالک ربات مجاز است."
@@ -519,7 +543,7 @@ def decide_subscription_request(rid, approve, owner_uid):
     DATA["subscriptions"][str(uid)] = {"expires": expires, "updated": now_text(), "approved_request": str(rid)}
     req["status"] = "approved"; req["reviewed"] = now_text(); req["reviewed_by"] = int(owner_uid); req["expires"] = expires
     save_data(); add_log("subscription_approved", "", uid, f"request={rid}; days={days}; expires={expires}")
-    try: bot.send_message(uid, f"✅ پرداخت شما بررسی و اشتراک فعال شد!\n⭐ مدت: {days} روز\n📅 پایان اشتراک: {esc(expires)}")
+    try: bot.send_message(uid, f"🎉 <b>اشتراک MASIH GUARD فعال شد!</b>\n━━━━━━━━━━━━━━━━━━━━\n✅ پرداخت بررسی و تأیید شد.\n⭐ مدت اشتراک: {days} روز\n📅 پایان اشتراک: <b>{esc(expires)}</b>\n👨‍💻 برای پشتیبانی یا تمدید، از دکمهٔ ارتباط با سازنده استفاده کن.", reply_markup=subscription_support_keyboard())
     except Exception: pass
     return f"✅ درخواست تأیید شد؛ اشتراک کاربر {uid} تا {esc(expires)} فعال شد."
 
@@ -1317,6 +1341,10 @@ def start_command(message):
         pass
     send_panel(uid,user_id=uid)
 
+@bot.message_handler(commands=["ping"])
+def ping_command(message):
+    bot.reply_to(message, "🏓 MASIH GUARD فعاله و پیام رو دریافت کرد.")
+
 @bot.message_handler(commands=["id"])
 def id_command(message):
     bot.reply_to(message,f"🆔 شناسه کاربر: <code>{message.from_user.id}</code>\nشناسه چت: <code>{message.chat.id}</code>")
@@ -1338,12 +1366,12 @@ def callback_handler(call):
         management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
         if management_action:
             if not call.message or call.message.chat.type != "private" or call.message.chat.id != uid:
-                bot.answer_callback_query(call.id, "پنل مدیریت فقط در گفت‌وگوی خصوصی مالک قابل استفاده است.", show_alert=True); return
-            if not is_owner(uid):
-                bot.answer_callback_query(call.id, "فقط مالک ربات مجاز است.", show_alert=True); return
+                bot.answer_callback_query(call.id, "پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.", show_alert=True); return
+            if not is_owner(uid) and data != "panel:open":
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
         if data.startswith("payout:"):
             if not is_owner(uid):
-                bot.answer_callback_query(call.id, "فقط مالک ربات مجاز است.", show_alert=True); return
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
             parts = data.split(":", 2)
             if len(parts) != 3 or parts[1] not in {"paid", "reject"}:
                 bot.answer_callback_query(call.id, "درخواست برداشت نامعتبر است.", show_alert=True); return
@@ -1355,7 +1383,7 @@ def callback_handler(call):
             return
         if data.startswith("subreq:"):
             if not is_owner(uid):
-                bot.answer_callback_query(call.id, "فقط مالک ربات مجاز است.", show_alert=True); return
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
             parts = data.split(":", 2)
             if len(parts) != 3 or parts[1] not in {"approve", "reject"}:
                 bot.answer_callback_query(call.id, "درخواست نامعتبر است.", show_alert=True); return
@@ -1390,7 +1418,7 @@ def callback_handler(call):
             if data.startswith("shop:request:"):
                 _,_,days,price=data.split(":")
                 result=request_subscription(uid,int(days),int(price))
-                bot.answer_callback_query(call.id); bot.send_message(uid,result); return
+                bot.answer_callback_query(call.id); bot.send_message(uid,result,reply_markup=subscription_support_keyboard()); return
 
         if data.startswith("group_rules:"):
             try: target=int(data.split(":",1)[1])
@@ -1400,16 +1428,25 @@ def callback_handler(call):
                 bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
             else: bot.answer_callback_query(call.id,"این گروه مجوز فعال ندارد.",show_alert=True)
             return
+        if data=="panel:open":
+            PANEL_HISTORY[uid]=[]
+            send_panel(uid,"home",user_id=uid)
+            bot.answer_callback_query(call.id)
+            return
         if data=="panel:back":
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             history=PANEL_HISTORY.setdefault(uid,[]); section=history.pop() if history else "home"
             send_panel(chat_id,section,call.message.message_id if call.message else None,user_id=uid)
             bot.answer_callback_query(call.id); return
         if data=="panel:home":
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             PANEL_HISTORY[uid]=[]; send_panel(chat_id,"home",call.message.message_id if call.message else None,user_id=uid)
             bot.answer_callback_query(call.id); return
         if data.startswith("panel:"):
             if not is_owner(uid):
-                bot.answer_callback_query(call.id,"فقط مالک ربات مجاز است.",show_alert=True); return
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             section=data.split(":",1)[1]
             if section not in SECTIONS: bot.answer_callback_query(call.id,"بخش شناخته نشد."); return
             previous=PANEL_CURRENT.get(uid,"home")
@@ -1419,7 +1456,7 @@ def callback_handler(call):
         if data.startswith("toggle:"):
             setting=data.split(":",1)[1]
             if not is_owner(uid):
-                bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             if setting=="smart_security":
                 DATA["settings"]["smart_security"]=not DATA["settings"].get("smart_security",True); save_data()
                 bot.answer_callback_query(call.id,"امنیت هوشمند سراسری: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
@@ -1429,7 +1466,7 @@ def callback_handler(call):
             return
         if data.startswith("ask:"):
             if not is_owner(uid):
-                bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             action=data.split(":",1)[1]
             global_actions={"public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs"}
             if action in global_actions:
@@ -1462,7 +1499,7 @@ def callback_handler(call):
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
-                bot.answer_callback_query(call.id,"فقط مالک مجاز است.",show_alert=True); return
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             action=data.split(":",1)[1]
             if action in {"ban_list","mute_list","whitelist"}:
                 WAITING[uid]={"action":"show_list_group","list_type":action}
