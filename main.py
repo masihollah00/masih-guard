@@ -16,6 +16,8 @@ AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o-mini").strip()
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://neon-portfolio-7vhj.onrender.com").strip()
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33").strip()
 OWNER_CONTACT_URL = os.getenv("OWNER_CONTACT_URL", "https://t.me/Ma3ih01").strip()
+CARD_NUMBER = os.getenv("CARD_NUMBER", "").strip()
+CARD_HOLDER = os.getenv("CARD_HOLDER", "").strip()
 BRAND, VERSION = "MASIH GUARD", "S1000+"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است؛ آن را در Environment هاست قرار بده.")
@@ -243,7 +245,7 @@ PUBLIC_FEATURES = (
 def public_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("💳 کیف پول تومانی", callback_data="user:wallet"),
-           types.InlineKeyboardButton("🛒 خرید اشتراک", callback_data="user:shop"))
+           types.InlineKeyboardButton("💳 افزایش موجودی", callback_data="user:deposit"))
     kb.row(types.InlineKeyboardButton("👥 زیرمجموعه‌گیری", callback_data="user:referrals"),
            types.InlineKeyboardButton("🧾 تراکنش‌ها", callback_data="user:transactions"))
     kb.row(types.InlineKeyboardButton("💸 درخواست برداشت از کیف پول", callback_data="user:payout"))
@@ -444,6 +446,23 @@ def subscription_support_keyboard():
     kb.add(types.InlineKeyboardButton("👨‍💻 دریافت اطلاعات پرداخت از سازنده", url=OWNER_CONTACT_URL))
     kb.add(types.InlineKeyboardButton("🛒 برگشت به بسته‌های اشتراک", callback_data="user:shop"))
     return kb
+
+def deposit_text(uid):
+    """Show owner-configured payment details and wait for a receipt privately."""
+    if not CARD_NUMBER:
+        WAITING.pop(uid, None)
+        return ("💳 <b>افزایش موجودی کیف پول</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+                "شماره کارت هنوز در تنظیمات هاست وارد نشده است. برای دریافت اطلاعات پرداخت، به سازنده پیام بده: ") + f"<a href=\"{esc(OWNER_CONTACT_URL)}\">@Ma3ih01</a>\n\n" + \
+               "بعد از واریز، تصویر رسید را همین‌جا در گفت‌وگوی خصوصی ربات بفرست."
+    WAITING[uid] = {"action": "deposit_receipt", "chat_id": uid, "created": now_text()}
+    holder = f"\n👤 صاحب کارت: <b>{esc(CARD_HOLDER)}</b>" if CARD_HOLDER else ""
+    return ("💳 <b>افزایش موجودی کیف پول</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"💳 شماره کارت: <code>{esc(CARD_NUMBER)}</code>{holder}\n\n"
+            "۱) مبلغ موردنظرت را به کارت بالا واریز کن.\n"
+            "۲) پس از واریز، تصویر رسید را همین‌جا در گفت‌وگوی خصوصی ربات بفرست.\n"
+            "۳) ربات رسید را همراه شناسه عددی و نام کاربری تو برای مالک می‌فرستد.\n"
+            "۴) پس از بررسی رسید توسط مالک، موجودی به‌صورت دستی شارژ می‌شود.\n\n"
+            "⚠️ تا پیش از تأیید مالک، موجودی تغییر نمی‌کند. رمز کارت، رمز پویا یا اطلاعات ورود بانکی را نفرست.")
 
 def shop_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -870,7 +889,25 @@ def _handle_group_shortcut(message, text):
 
 @bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
 def group_message_handler(message):
+    global BOT_USERNAME, BOT_ID
     try:
+        text=get_text(message)
+        # /start is a public entry point and should answer in groups too, even before group licensing.
+        if text and re.match(r"^/start(?:@\w+)?(?:\s|$)", text.strip(), flags=re.IGNORECASE):
+            global BOT_USERNAME
+            try:
+                if not BOT_USERNAME:
+                    BOT_USERNAME = (getattr(bot.get_me(), "username", "") or "").casefold()
+            except Exception:
+                pass
+            if BOT_USERNAME:
+                private_link = f"https://t.me/{BOT_USERNAME}?start=group"
+                kb = types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("🤖 باز کردن ربات در خصوصی", url=private_link))
+                bot.reply_to(message, "سلام! 👋 مسیح گارد فعاله. برای استفاده از کیف پول، افزایش موجودی و پنل کاربری، ربات را در گفت‌وگوی خصوصی باز کن.", reply_markup=kb)
+            else:
+                bot.reply_to(message, "سلام! 👋 مسیح گارد فعاله. برای استفاده از امکانات خصوصی، ربات را در پیوی باز کن.")
+            return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
             req = DATA.setdefault("group_requests", {})
@@ -881,7 +918,6 @@ def group_message_handler(message):
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
             return
-        text=get_text(message)
         # Route AI replies and commands before generic handlers: this group catch-all is registered first.
         if text and text.split()[0].split("@", 1)[0].casefold() in {"/ai", "/ask"}:
             parts = text.split(maxsplit=1)
@@ -895,7 +931,6 @@ def group_message_handler(message):
             return
         # «هوش» alone gets the short greeting; «هوش + question» asks AI.
         # Replying to the bot with a question also invokes AI, without needing a keyword.
-        global BOT_USERNAME, BOT_ID
         try:
             if not BOT_ID or not BOT_USERNAME:
                 me = bot.get_me()
@@ -1399,6 +1434,7 @@ def callback_handler(call):
             ensure_user(uid,call.from_user.username,call.from_user.first_name)
             if data=="user:home":
                 bot.answer_callback_query(call.id); bot.send_message(uid,public_features_text(),reply_markup=public_keyboard()); return
+            if data=="user:deposit": bot.answer_callback_query(call.id); bot.send_message(uid,deposit_text(uid)); return
             if data=="user:wallet": bot.answer_callback_query(call.id); bot.send_message(uid,public_wallet(uid)); return
             if data=="user:shop": bot.answer_callback_query(call.id); bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard()); return
             if data=="user:referrals": bot.answer_callback_query(call.id); bot.send_message(uid,referral_text(uid)); return
@@ -1561,13 +1597,14 @@ def private_text_handler(message):
         bot.send_message(uid,"اسم دلخواه را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم."); return
     public_shortcuts = {
         "کیف پول": "user:wallet", "موجودی": "user:wallet", "wallet": "user:wallet",
-        "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
+        "افزایش موجودی": "user:deposit", "شارژ کیف پول": "user:deposit", "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
         "زیرمجموعه": "user:referrals", "دعوت‌ها": "user:referrals", "دعوت ها": "user:referrals",
         "تراکنش": "user:transactions", "تراکنش‌ها": "user:transactions", "تراکنش ها": "user:transactions",
         "امکانات": "user:home", "راهنما": "user:home", "help": "user:home",
     }
     shortcut = public_shortcuts.get(text.casefold())
     if shortcut == "user:wallet": bot.send_message(uid, public_wallet(uid)); return
+    if shortcut == "user:deposit": bot.send_message(uid, deposit_text(uid)); return
     if shortcut == "user:shop": bot.send_message(uid, shop_text(uid), reply_markup=shop_keyboard()); return
     if shortcut == "user:referrals": bot.send_message(uid, referral_text(uid)); return
     if shortcut == "user:transactions": bot.send_message(uid, transactions_text(uid)); return
@@ -1575,6 +1612,13 @@ def private_text_handler(message):
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
+    if action == "deposit_receipt":
+        if text.casefold() in {"لغو", "cancel", "/cancel"}:
+            WAITING.pop(uid, None)
+            bot.send_message(uid, "درخواست افزایش موجودی لغو شد.")
+        else:
+            bot.send_message(uid, "برای تکمیل افزایش موجودی، لطفاً تصویر رسید واریز را به‌صورت عکس یا فایل همین‌جا بفرست. برای لغو بنویس «لغو».")
+        return
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
                 "public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
                 "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group"}
@@ -1901,6 +1945,33 @@ def private_text_handler(message):
         bot.send_message(uid,"⚠️ ورودی یا دسترسی معتبر نیست.\n"+esc(str(e)))
     except Exception as e:
         print("Private action error:",repr(e)); bot.send_message(uid,"⚠️ عملیات ناموفق بود؛ دسترسی ربات و اطلاعات واردشده را بررسی کن.")
+
+@bot.message_handler(content_types=["photo", "document"], func=lambda m: m.chat.type == "private")
+def private_deposit_receipt_handler(message):
+    uid = message.from_user.id if message.from_user else 0
+    pending = WAITING.get(uid, {})
+    if pending.get("action") != "deposit_receipt":
+        return
+    user = message.from_user
+    username = f"@{user.username}" if getattr(user, "username", None) else "ندارد"
+    first_name = getattr(user, "first_name", "") or "بدون نام"
+    caption = ("🧾 <b>رسید افزایش موجودی جدید</b>\n"
+               f"👤 نام: {esc(first_name)}\n"
+               f"🔗 آیدی: {esc(username)}\n"
+               f"🆔 شناسه عددی خریدار: <code>{uid}</code>\n"
+               f"💬 چت خصوصی خریدار: <code>{uid}</code>\n"
+               f"🕒 زمان دریافت: {esc(now_text())}\n"
+               "⚠️ رسید را بررسی کن؛ تا قبل از تأیید، موجودی را شارژ نکن.")
+    try:
+        bot.send_message(OWNER_ID, caption)
+        bot.forward_message(OWNER_ID, uid, message.message_id)
+        WAITING.pop(uid, None)
+        add_log("deposit_receipt_received", "", uid, f"username={username}; first_name={first_name}")
+        save_data()
+        bot.reply_to(message, "✅ رسیدت برای مالک ارسال شد. بعد از بررسی و تأیید، موجودی شارژ می‌شود. شناسه عددی تو برای مالک هم ارسال شد.")
+    except Exception as e:
+        print("Deposit receipt forwarding error:", repr(e))
+        bot.reply_to(message, "⚠️ ارسال رسید ناموفق شد. لطفاً چند لحظه بعد دوباره بفرست یا به سازنده @Ma3ih01 پیام بده.")
 
 if __name__ == "__main__":
     print(f"{BRAND} {VERSION}: starting polling")
