@@ -817,6 +817,7 @@ _GROUP_ALIASES = {
     "ping": "ping", "پینگ": "ping", "تست": "ping",
     "rules": "rules", "قوانین": "rules", "قانون": "rules",
     "stats": "gstats", "آمار": "gstats", "آمارگروه": "gstats",
+    "هوش": "ai", "هوش مصنوعی": "ai",
     "ban": "ban", "بن": "ban", "بن کن": "ban", "بنکن": "ban", "مسدود کن": "ban", "مسدودکن": "ban", "بلاک": "ban", "بلاک کن": "ban", "بلاکن": "ban",
     "unban": "unban", "رفع بن": "unban", "رفع‌بن": "unban", "رفع_بن": "unban", "آزاد کن": "unban", "آزادکن": "unban", "رفع مسدودی": "unban", "رفع‌مسدودی": "unban",
     "mute": "mute", "سیک": "mute", "سکوت": "mute", "سکوت کن": "mute", "سایلنت": "mute", "بی‌صدا": "mute", "بیصدا": "mute",
@@ -993,8 +994,7 @@ def _handle_group_shortcut(message, text):
         bot.reply_to(message, "⚠️ انجام دستور ناموفق بود؛ دسترسی ادمین ربات و مجوزهای گروه را بررسی کن.")
     return True
 
-@bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
-def handle_ai_group_management(message, text):
+def handle_ai_group_management(message, text=None):
     """Execute a small, explicit set of safe group-setting requests from AI replies."""
     normalized = (text or "").casefold().replace("ي", "ی").replace("ك", "ک")
     normalized = re.sub(r"[\u200c\s]+", "", normalized)
@@ -1068,6 +1068,41 @@ def group_message_handler(message):
                     bot.reply_to(message, "برای بازکردن پنل، ابتدا گفت‌وگوی خصوصی ربات را باز کن و /start را بزن.")
             else:
                 bot.reply_to(message, "⛔ فقط مالک ربات می‌تواند پنل مدیریت را باز کند.")
+            return
+        # Owner activates the current group directly; no group ID needs to be copied.
+        activation_match = re.fullmatch(r"فعال(?:\s|\u200c)*سازی\s+(\d+)\s*(?:روز)?", normalized_text)
+        if activation_match:
+            uid = getattr(getattr(message, "from_user", None), "id", 0)
+            if not is_owner(uid):
+                bot.reply_to(message, "⛔ فقط مالک ربات می‌تواند اشتراک گروه را فعال کند.")
+                return
+            days = int(activation_match.group(1))
+            if not 0 <= days <= 3650:
+                bot.reply_to(message, "⚠️ تعداد روز باید بین ۰ تا ۳۶۵۰ باشد؛ عدد ۰ یعنی دائمی.")
+                return
+            try:
+                me = bot.get_me()
+                member = bot.get_chat_member(message.chat.id, me.id)
+                if getattr(member, "status", "") not in ("administrator", "creator"):
+                    bot.reply_to(message, "⚠️ برای فعال‌سازی، ابتدا ربات را مدیر همین گروه کن.")
+                    return
+            except Exception as check_error:
+                print("Group activation permission check error:", repr(check_error))
+                bot.reply_to(message, "⚠️ نتونستم حضور و مجوز ربات رو بررسی کنم؛ تنظیمات مدیر ربات رو بررسی کن.")
+                return
+            from datetime import timedelta
+            now = datetime.now()
+            expires = "" if days == 0 else (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            DATA.setdefault("group_licenses", {})[str(message.chat.id)] = {
+                "approved": True, "expires": expires, "activated_by": uid, "updated": now_text()
+            }
+            DATA.setdefault("group_requests", {}).pop(str(message.chat.id), None)
+            add_log("group_license_activated_in_group", message.chat.id, uid, f"days={days}")
+            save_data()
+            bot.reply_to(message, "🛡️ <b>فعال‌سازی MASIH GUARD موفق بود</b>\n"
+                         f"✅ اشتراک این گروه فعال شد.\n⭐ مدت: {'دائمی' if days == 0 else str(days) + ' روز'}\n"
+                         f"📅 پایان اعتبار: {esc(expires or 'دائمی')}\n"
+                         "🌈 تنظیمات این گروه از این پس جداگانه ذخیره می‌شوند.")
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -1666,7 +1701,7 @@ def callback_handler(call):
                     "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
                     "member_info":"شناسه گروه | شناسه کاربر را بفرست.",
                     "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.",
-                    "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.",
+                    "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).",
                     "extend_group":"شناسه گروه | تعداد روز را بفرست.",
                     "revoke_group":"شناسه گروه را بفرست.",
                     "announcement":"شناسه گروه | متن اطلاعیه را بفرست.",
@@ -1680,7 +1715,7 @@ def callback_handler(call):
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
@@ -1946,6 +1981,8 @@ def private_text_handler(message):
             label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
             bot.send_message(uid,f"✅ {label} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
         elif action in ("activate_group", "extend_group", "revoke_group"):
+            if action == "activate_group":
+                raise ValueError("برای فعال‌سازی، ربات را مدیر گروه کن و داخل همان گروه بنویس: فعال سازی ۳۰ روز؛ برای دائمی عدد ۰ را بزن.")
             parts=[x.strip() for x in text.split("|")]
             target=int(parts[0])
             if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
