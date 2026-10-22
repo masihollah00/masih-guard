@@ -23,6 +23,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=4
 LOCK = threading.RLock()
 WAITING, GAMES, PANEL_CURRENT, PANEL_HISTORY = {}, {}, {}, {}
 BOT_USERNAME = ""
+BOT_ID = 0
 
 DEFAULT_GROUP = {
     "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True,
@@ -665,6 +666,184 @@ def process_group_security(message):
         return True
     save_data(); return False
 
+# Persian aliases and slash commands accepted by the group router.
+_GROUP_ALIASES = {
+    "help": "help", "راهنما": "help", "دستورات": "help", "کمک": "help", "راهنمای ربات": "help",
+    "id": "id", "آیدی": "id", "ایدی": "id", "شناسه": "id",
+    "ping": "ping", "پینگ": "ping", "تست": "ping",
+    "rules": "rules", "قوانین": "rules", "قانون": "rules",
+    "stats": "gstats", "آمار": "gstats", "آمارگروه": "gstats",
+    "ban": "ban", "بن": "ban", "بن کن": "ban", "بنکن": "ban", "مسدود کن": "ban", "مسدودکن": "ban", "بلاک": "ban", "بلاک کن": "ban", "بلاکن": "ban",
+    "unban": "unban", "رفع بن": "unban", "رفع‌بن": "unban", "رفع_بن": "unban", "آزاد کن": "unban", "آزادکن": "unban", "رفع مسدودی": "unban", "رفع‌مسدودی": "unban",
+    "mute": "mute", "سیک": "mute", "سکوت": "mute", "سکوت کن": "mute", "سایلنت": "mute", "بی‌صدا": "mute", "بیصدا": "mute",
+    "unmute": "unmute", "رفع سکوت": "unmute", "رفع‌سکوت": "unmute", "رفع_سکوت": "unmute", "آزاد سکوت": "unmute", "آزادسکوت": "unmute",
+    "kick": "kick", "اخراج": "kick", "اخراج کن": "kick", "اخراج‌کن": "kick", "بنداز بیرون": "kick", "بندازبیرون": "kick",
+    "warn": "warn", "اخطار": "warn", "اخطار بده": "warn", "هشدار": "warn",
+    "pin": "pin", "سنجاق": "pin", "پین": "pin",
+    "unpin": "unpin", "لغوسنجاق": "unpin", "برداشتن‌سنجاق": "unpin",
+    "delete": "delete", "حذف": "delete", "پاک‌کن": "delete", "پاککن": "delete",
+    "clean": "clean", "پاکسازی": "clean", "پاک سازی": "clean", "پاکسازی پیام": "clean", "پاکسازیپیام": "clean",
+    "report": "report", "گزارش": "report", "گزارش‌تخلف": "report",
+    "ai": "ai", "ask": "ai", "هوش": "ai",
+    "قفل لینک": "set_anti_link_on", "ضدلینک روشن": "set_anti_link_on", "بازکردن لینک": "set_anti_link_off", "ضدلینک خاموش": "set_anti_link_off",
+    "قفل تبلیغ": "set_anti_ads_on", "ضدتبلیغ روشن": "set_anti_ads_on", "بازکردن تبلیغ": "set_anti_ads_off", "ضدتبلیغ خاموش": "set_anti_ads_off",
+    "ضد اسپم روشن": "set_anti_spam_on", "ضد اسپم خاموش": "set_anti_spam_off", "ضدتکرار روشن": "set_anti_repeat_on", "ضدتکرار خاموش": "set_anti_repeat_off",
+    "قفل فوروارد": "set_anti_forward_on", "بازکردن فوروارد": "set_anti_forward_off",
+    "قفل رسانه": "set_media_lock_on", "بازکردن رسانه": "set_media_lock_off",
+    "خوشامد روشن": "set_welcome_on_on", "خوشامد خاموش": "set_welcome_on_off",
+    "خداحافظی روشن": "set_farewell_on_on", "خداحافظی خاموش": "set_farewell_on_off",
+    "تأیید ورود روشن": "set_join_approval_on", "تایید ورود روشن": "set_join_approval_on", "تأیید ورود خاموش": "set_join_approval_off", "تایید ورود خاموش": "set_join_approval_off",
+    "قفل عکس": "set_lock_photos_on", "بازکردن عکس": "set_lock_photos_off",
+    "قفل فیلم": "set_lock_videos_on", "بازکردن فیلم": "set_lock_videos_off",
+    "قفل فایل": "set_lock_files_on", "بازکردن فایل": "set_lock_files_off",
+    "قفل استیکر": "set_lock_stickers_on", "بازکردن استیکر": "set_lock_stickers_off",
+    "قفل ویس": "set_lock_voice_on", "بازکردن ویس": "set_lock_voice_off",
+    "قفل ویدئوی گرد": "set_lock_video_notes_on", "بازکردن ویدئوی گرد": "set_lock_video_notes_off",
+}
+
+def _normalize_group_command(text):
+    value = (text or "").strip().casefold()
+    value = value.replace("ي", "ی").replace("ك", "ک")
+    value = re.sub(r"[\u200c\s]+", "", value)
+    value = value.lstrip("/")
+    if "@" in value:
+        value = value.split("@", 1)[0]
+    return value
+
+def _reply_target(message):
+    replied = getattr(message, "reply_to_message", None)
+    return getattr(getattr(replied, "from_user", None), "id", None) if replied else None
+
+def _handle_group_shortcut(message, text):
+    """Return True when a recognized group shortcut was handled."""
+    if not text:
+        return False
+    words = text.strip().split()
+    command = None
+    used_words = 0
+    # Longest phrase first supports commands such as «مسدود کن» and «رفع سکوت».
+    for n in range(min(3, len(words)), 0, -1):
+        candidate = " ".join(words[:n])
+        command = _GROUP_ALIASES.get(_normalize_group_command(candidate))
+        if command:
+            used_words = n
+            break
+    if not command:
+        return False
+    chat_id = message.chat.id
+    user = getattr(message, "from_user", None)
+    uid = getattr(user, "id", 0)
+    args = " ".join(words[used_words:]).strip()
+    if command == "ai":
+        # AI is intentionally activated by the word «هوش» or a reply to the bot.
+        question = args
+        if not question and getattr(message, "reply_to_message", None):
+            question = get_text(message.reply_to_message).strip()
+        if not question:
+            bot.reply_to(message, "جانم، بگو ببینم؟")
+            return True
+        status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+        answer = ask_ai(question)
+        try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+        except Exception: bot.send_message(chat_id, esc(answer[:3900]), reply_to_message_id=message.message_id)
+        return True
+    if command == "help":
+        bot.reply_to(message, "📚 <b>دستورات عمومی:</b> پینگ، آیدی، قوانین، آمار، هوش، راهنما\n<b>مدیریت (با ریپلای روی پیام عضو):</b> بن، رفع بن، سیک/سکوت، رفع سکوت، اخراج، اخطار، سنجاق، لغو سنجاق، حذف، پاکسازی، گزارش\nفرمان‌های مدیریتی فقط برای مدیران گروه فعال‌اند.")
+        return True
+    if command == "id":
+        target = _reply_target(message) or uid
+        bot.reply_to(message, f"🆔 شناسهٔ کاربر: <code>{target}</code>\nشناسهٔ گروه: <code>{chat_id}</code>")
+        return True
+    if command == "ping":
+        bot.reply_to(message, "🏓 MASIH GUARD فعاله و پیام رو دریافت کرد.")
+        return True
+    if command == "rules":
+        bot.reply_to(message, "📜 <b>قوانین گروه</b>\n" + esc(get_group_settings(chat_id).get("rules", "قوانینی تنظیم نشده است.")))
+        return True
+    if command == "gstats":
+        gs = DATA.setdefault("group_stats", {}).get(str(chat_id), {})
+        active = len(DATA.setdefault("active_members", {}).get(str(chat_id), {}))
+        bot.reply_to(message, f"📊 <b>آمار این گروه</b>\nپیام‌ها: {int(gs.get('messages',0))}\nپیام‌های مسدودشده: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
+        return True
+    if command.startswith("set_"):
+        setting_action = command[4:]
+        enabled = setting_action.endswith("_on")
+        setting = setting_action[:-3] if enabled else setting_action[:-4]
+        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "welcome_on", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"}
+        if setting not in allowed_settings:
+            bot.reply_to(message, "⚠️ این تنظیم شناخته نشد.")
+            return True
+        get_group_settings(chat_id)[setting] = enabled
+        save_data()
+        add_log("group_setting_changed", chat_id, uid, f"{setting}={enabled}")
+        bot.reply_to(message, f"✅ {esc(setting)}: {'روشن' if enabled else 'خاموش'}")
+        return True
+    if command == "report":
+        if not getattr(message, "reply_to_message", None):
+            bot.reply_to(message, "برای گزارش تخلف، روی پیام موردنظر ریپلای کن و «گزارش» را بفرست.")
+            return True
+        reported = message.reply_to_message
+        add_log("user_report", chat_id, uid, f"reported_message={reported.message_id}; text={get_text(reported)[:180]}")
+        try: bot.send_message(OWNER_ID, f"🚨 <b>گزارش تخلف</b>\nگروه: <code>{chat_id}</code>\nگزارش‌دهنده: <code>{uid}</code>\nپیام: <code>{reported.message_id}</code>\n{esc(get_text(reported)[:800])}")
+        except Exception as e: print("Report owner notice error:", repr(e))
+        bot.reply_to(message, "🚨 گزارش برای مالک ربات ارسال شد.")
+        return True
+    # Remaining actions change group state and therefore require a group admin.
+    if not user or not is_group_admin(chat_id, uid):
+        bot.reply_to(message, "⛔ این دستور فقط برای مدیران گروه است.")
+        return True
+    target = _reply_target(message)
+    if command in {"ban", "mute", "unmute", "kick", "warn", "pin", "unpin", "delete"} and not target and command not in {"unban"}:
+        if command in {"pin", "unpin", "delete"}:
+            if not getattr(message, "reply_to_message", None):
+                bot.reply_to(message, "برای این دستور روی پیام موردنظر ریپلای کن.")
+                return True
+        else:
+            bot.reply_to(message, "برای هدف‌گرفتن کاربر، روی یکی از پیام‌های او ریپلای کن.")
+            return True
+    try:
+        if command == "ban":
+            bot.ban_chat_member(chat_id, int(target)); bot.reply_to(message, f"⛔ کاربر <code>{target}</code> مسدود شد.")
+        elif command == "unban":
+            target_id = int(target or args)
+            bot.unban_chat_member(chat_id, target_id, only_if_banned=True); bot.reply_to(message, f"✅ مسدودیت <code>{target_id}</code> برداشته شد.")
+        elif command == "mute":
+            bot.restrict_chat_member(chat_id, int(target), permissions=types.ChatPermissions(can_send_messages=False))
+            bot.reply_to(message, f"🔇 کاربر <code>{target}</code> سکوت شد.")
+        elif command == "unmute":
+            bot.restrict_chat_member(chat_id, int(target), permissions=types.ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_video_notes=True, can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True, can_add_web_page_previews=True))
+            bot.reply_to(message, f"🔊 سکوت کاربر <code>{target}</code> برداشته شد.")
+        elif command == "kick":
+            bot.ban_chat_member(chat_id, int(target)); bot.unban_chat_member(chat_id, int(target), only_if_banned=True); bot.reply_to(message, f"👢 کاربر <code>{target}</code> از گروه اخراج شد.")
+        elif command == "warn":
+            warn_member(chat_id, int(target), args or "اخطار مدیر")
+        elif command == "pin":
+            bot.pin_chat_message(chat_id, message.reply_to_message.message_id); bot.reply_to(message, "📌 پیام سنجاق شد.")
+        elif command == "unpin":
+            if message.reply_to_message: bot.unpin_chat_message(chat_id, message.reply_to_message.message_id)
+            else: bot.unpin_all_chat_messages(chat_id)
+            bot.reply_to(message, "📌 سنجاق برداشته شد.")
+        elif command == "delete":
+            bot.delete_message(chat_id, message.reply_to_message.message_id); bot.reply_to(message, "🧹 پیام حذف شد.")
+        elif command == "clean":
+            amount = int(args) if args else 10
+            if not 1 <= amount <= 100:
+                bot.reply_to(message, "تعداد باید بین ۱ تا ۱۰۰ باشد."); return True
+            rows = DATA.setdefault("message_history", {}).get(str(chat_id), [])[-amount:]
+            deleted = 0
+            for row in reversed(rows):
+                try: bot.delete_message(chat_id, int(row["message_id"])); deleted += 1
+                except Exception: pass
+            bot.reply_to(message, f"🧹 {deleted} پیام حذف شد.")
+        add_log("group_command", chat_id, uid, command)
+        save_data()
+    except (ValueError, TypeError):
+        bot.reply_to(message, "⚠️ شناسه یا تعداد واردشده معتبر نیست.")
+    except Exception as e:
+        print("Group command error:", repr(e))
+        bot.reply_to(message, "⚠️ انجام دستور ناموفق بود؛ دسترسی ادمین ربات و مجوزهای گروه را بررسی کن.")
+    return True
+
 @bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
 def group_message_handler(message):
     try:
@@ -679,19 +858,56 @@ def group_message_handler(message):
                 except Exception: pass
             return
         text=get_text(message)
-        # Route AI commands here because this catch-all handler is registered before command handlers.
+        # Route AI replies and commands before generic handlers: this group catch-all is registered first.
         if text and text.split()[0].split("@", 1)[0].casefold() in {"/ai", "/ask"}:
             parts = text.split(maxsplit=1)
             if len(parts) < 2:
-                bot.reply_to(message, "🤖 سؤال را بعد از دستور بنویس؛ نمونه: /ai سلام")
+                bot.reply_to(message, "جانم، بگو ببینم؟")
             else:
                 status = bot.reply_to(message, "🤖 در حال بررسی سؤال...")
                 answer = ask_ai(parts[1].strip())
                 try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
-                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]))
+                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
+            return
+        # «هوش» alone gets the short greeting; «هوش + question» asks AI.
+        # Replying to the bot with a question also invokes AI, without needing a keyword.
+        global BOT_USERNAME, BOT_ID
+        try:
+            if not BOT_ID or not BOT_USERNAME:
+                me = bot.get_me()
+                BOT_ID = getattr(me, "id", 0) or BOT_ID
+                BOT_USERNAME = (getattr(me, "username", "") or "").casefold() or BOT_USERNAME
+        except Exception:
+            pass
+        bot_id = BOT_ID or None
+        replied = getattr(message, "reply_to_message", None)
+        reply_to_bot = bool(replied and getattr(getattr(replied, "from_user", None), "is_bot", False)
+                            and (getattr(getattr(replied, "from_user", None), "id", None) == bot_id
+                                 or (BOT_USERNAME and (getattr(getattr(replied, "from_user", None), "username", "") or "").casefold() == BOT_USERNAME)))
+        if text and text.strip().casefold().replace("ي", "ی").replace("ك", "ک") == "هوش":
+            bot.reply_to(message, "جانم، بگو ببینم؟")
+            return
+        if reply_to_bot and text and text.strip() and not text.strip().startswith("/"):
+            status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+            answer = ask_ai(text.strip())
+            try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+            except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
+            return
+        if text and text.strip().casefold().startswith("هوش "):
+            question = text.strip()[len("هوش "):].strip()
+            if not question:
+                bot.reply_to(message, "جانم، بگو ببینم؟")
+            else:
+                status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+                answer = ask_ai(question)
+                try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
             return
         # Track group activity and bounded message history for selected statistics/cleanup features.
         track_group_activity(message.chat.id, getattr(message.from_user,"id",0), message.message_id)
+        if text and _handle_group_shortcut(message, text):
+            save_data()
+            return
         # Group management shortcuts work only for admins and licensed groups.
         if text and text.split()[0].split("@",1)[0] in {"/pin","/unpin","/clean","/cleanuser","/gstats","/report"}:
             cmd=text.split()[0].split("@",1)[0]
@@ -1272,11 +1488,33 @@ def private_text_handler(message):
     uid=message.from_user.id; text=(message.text or "").strip()
     ensure_user(uid,message.from_user.username,message.from_user.first_name)
     if text.startswith("/"): return
+    # AI trigger requested by the owner: only «هوش» or a reply to the bot activates it.
+    normalized_private = text.replace("ي", "ی").replace("ك", "ک").strip().casefold()
+    if normalized_private == "هوش":
+        bot.reply_to(message, "جانم، بگو ببینم؟")
+        return
+    if normalized_private.startswith("هوش "):
+        question = text.strip()[len("هوش "):].strip()
+        if not question:
+            bot.reply_to(message, "جانم، بگو ببینم؟")
+        else:
+            status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+            answer = ask_ai(question)
+            try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+            except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
+        return
+    replied = getattr(message, "reply_to_message", None)
+    if replied and getattr(getattr(replied, "from_user", None), "is_bot", False) and text and not text.startswith("/"):
+        status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+        answer = ask_ai(text)
+        try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+        except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
+        return
     # Direct public tools work without opening a panel first.
-    if text.casefold()=="پروکسی":
+    if text.casefold() in {"پروکسی", "پروکسی‌ها", "پروکسی ها"}:
         bot.send_message(uid,proxy_list_text(limit=10, with_ping=False))
         return
-    if text.casefold()=="فونت":
+    if text.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
         WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
     if text.casefold().startswith("فونت "):
         raw=text[5:].strip()
@@ -1284,6 +1522,19 @@ def private_text_handler(message):
             bot.send_message(uid,"برای نمایش ۵۰ سبک، متن حداکثر ۱۲۰ نویسه باشد."); return
         WAITING[uid]={"action":"public_font_name","font_text":raw}
         bot.send_message(uid,"اسم دلخواه را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم."); return
+    public_shortcuts = {
+        "کیف پول": "user:wallet", "موجودی": "user:wallet", "wallet": "user:wallet",
+        "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
+        "زیرمجموعه": "user:referrals", "دعوت‌ها": "user:referrals", "دعوت ها": "user:referrals",
+        "تراکنش": "user:transactions", "تراکنش‌ها": "user:transactions", "تراکنش ها": "user:transactions",
+        "امکانات": "user:home", "راهنما": "user:home", "help": "user:home",
+    }
+    shortcut = public_shortcuts.get(text.casefold())
+    if shortcut == "user:wallet": bot.send_message(uid, public_wallet(uid)); return
+    if shortcut == "user:shop": bot.send_message(uid, shop_text(uid), reply_markup=shop_keyboard()); return
+    if shortcut == "user:referrals": bot.send_message(uid, referral_text(uid)); return
+    if shortcut == "user:transactions": bot.send_message(uid, transactions_text(uid)); return
+    if shortcut == "user:home": bot.send_message(uid, public_features_text(), reply_markup=public_keyboard()); return
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
