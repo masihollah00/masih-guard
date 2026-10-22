@@ -11,7 +11,8 @@ BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").st
 OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
 DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+AI_API_URL = (os.getenv("AI_API_URL") or os.getenv("AI_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
+AI_BASE_URL = AI_API_URL  # سازگاری با تنظیم قدیمی هاست
 AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o-mini").strip()
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://neon-portfolio-7vhj.onrender.com").strip()
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33").strip()
@@ -52,7 +53,7 @@ DEFAULT_DATA = {
         "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
-    "subscription_requests": {}, "payout_requests": {},
+    "subscription_requests": {}, "payout_requests": {}, "pending_deposits": {},
     "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}
 }
@@ -214,9 +215,9 @@ def is_group_admin(chat_id, user_id):
 SECTIONS = {
     "security":"🛡 امنیت گروه", "members":"👥 مدیریت اعضا", "settings":"⚙️ تنظیمات گروه",
     "welcome":"👋 خوشامد و خداحافظی", "rules":"📜 قوانین و پاسخ خودکار",
-    "referrals":"👥 کیف پول تومانی و اشتراک", "proxy":"🌐 پنل پروکسی",
+    "referrals":"💰 کیف پول",
     "stats":"📊 آمار و گزارش", "customers":"💼 مشتریان و اشتراک",
-    "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی", "games":"🎮 بازی و امتیاز",
+    "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی",
     "backup":"💾 پشتیبان‌گیری", "daily":"📅 گزارش روزانه",
     "smart":"🧩 امنیت هوشمند", "status":"🚀 وضعیت ربات",
     "bot_settings":"🎛️ تنظیمات عمومی ربات", "licenses":"🛡️ مجوز نصب گروه‌ها"
@@ -232,7 +233,7 @@ PUBLIC_FEATURES = (
     "├ اخطار، سکوت، رفع سکوت\n├ مسدودسازی، آزادسازی و اخراج\n"
     "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n├ سنجاق پیام و پاک‌سازی پیام‌ها با فرمان مدیر\n\n"
     "⚙️ <b>ابزارهای کاربردی</b>\n"
-    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۵۰ سبک فونت در گفت‌وگوی خصوصی\n"
+    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۱۰۰ مدل فونت در گفت‌وگوی خصوصی\n"
     "├ دریافت پروکسی‌های ذخیره‌شده\n├ هوش مصنوعی و تیکت پشتیبانی\n"
     "├ بازی، امتیاز و گزارش فعالیت\n\n"
     "💳 <b>کیف پول تومانی و اشتراک</b>\n"
@@ -243,17 +244,12 @@ PUBLIC_FEATURES = (
 )
 
 def public_keyboard():
+    # Keep the landing page compact; all wallet actions live behind one wallet entry.
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("💳 کیف پول تومانی", callback_data="user:wallet"),
-           types.InlineKeyboardButton("💳 افزایش موجودی", callback_data="user:deposit"))
-    kb.row(types.InlineKeyboardButton("👥 زیرمجموعه‌گیری", callback_data="user:referrals"),
-           types.InlineKeyboardButton("🧾 تراکنش‌ها", callback_data="user:transactions"))
-    kb.row(types.InlineKeyboardButton("💸 درخواست برداشت از کیف پول", callback_data="user:payout"))
-    kb.row(types.InlineKeyboardButton("🔤 تبدیل فونت", callback_data="user:font"),
-           types.InlineKeyboardButton("🌐 پروکسی‌ها", callback_data="user:proxies"))
-    kb.row(types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"),
-           types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
-    kb.row(types.InlineKeyboardButton("👑 پنل مدیریت (نمایش برای همه)", callback_data="panel:open"))
+    kb.row(types.InlineKeyboardButton("💰 کیف پول", callback_data="user:wallet"))
+    kb.row(types.InlineKeyboardButton("🛒 خرید اشتراک", callback_data="user:shop"),
+           types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"))
+    kb.row(types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
     kb.row(types.InlineKeyboardButton("👨‍💻 پیام به سازنده", url=OWNER_CONTACT_URL),
            types.InlineKeyboardButton("🌐 وب‌سایت", url=configured_url("website_url", WEBSITE_URL)))
     return kb
@@ -283,12 +279,10 @@ def section_keyboard(section):
       "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
       "settings":[("⚙️ تنظیم سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules")],
       "referrals":[("💳 آمار کیف پول تومانی","show:wallet_stats"),("👥 آمار دعوت‌ها","show:referral_stats"),("🛒 درخواست‌های اشتراک","show:subscription_requests"),("💸 درخواست‌های برداشت","show:payout_requests"),("➕ تنظیم موجودی کیف پول","ask:wallet_adjust"),("📦 بسته‌های اشتراک","show:shop")],
-      "proxy":[("➕ افزودن پروکسی","ask:add_proxy"),("📋 نمایش پروکسی‌ها","show:proxies"),("🗑 حذف پروکسی","ask:delete_proxy")],
       "stats":[("📊 آمار ربات","show:stats"),("🧾 گزارش فعالیت","show:logs"),("📈 آمار یک گروه","ask:group_stats"),("📅 گزارش روزانه","show:daily"),("📅 گزارش هفتگی","show:weekly_report"),("🛡 وضعیت امنیت","show:security_status"),("💳 فروش و تمدید اشتراک","show:subscription_sales"),("🔎 جست‌وجوی گزارش‌ها","ask:search_logs")],
       "customers":[("➕ افزودن مشتری","ask:add_customer"),("📋 فهرست مشتریان","show:customers"),("🔎 جست‌وجوی مشتری","ask:find_customer")],
       "tickets":[("🎫 ثبت تیکت","ask:ticket"),("📋 تیکت‌ها","show:tickets")],
       "ai":[("🧠 پرسش از هوش مصنوعی","ask:ai")],
-      "games":[("🎮 بازی حدس عدد","game:guess"),("🏆 امتیاز من","show:points")],
       "backup":[("💾 دریافت نسخه پشتیبان","show:backup")],
       "daily":[("📅 گزارش روزانه","show:daily")],
       "smart":[("🧩 روشن/خاموش امنیت هوشمند","toggle:smart_security")],
@@ -377,13 +371,29 @@ FONT_WRAPPERS = [
  ("♡ قلب توخالی", "♡ {} ♡"), ("ღ قلبی ۲", "ღ {} ღ"), ("ツ ژاپنی", "ツ {} ツ"), ("メ ژاپنی ۲", "メ {} メ"),
  ("〆 ژاپنی ۳", "〆 {} 〆"), ("彡 سایه‌ای", "彡 {} 彡"), ("乂 ضربدری", "乂 {} 乂"), ("× ضربدری ۲", "× {} ×"),
  ("➳ پیکانی", "➳ {} ➳"), ("➤ پیکانی ۲", "➤ {} ➤"), ("☯ نمادین", "☯ {} ☯"), ("☾ ماه", "☾ {} ☽"),
- ("༄ تزئینی", "༄ {} ༄"), ("𓆩 قاب ۱", "𓆩 {} 𓆪"), ("⫷ قاب ۲", "⫷ {} ⫸"), ("༒ تاریک", "༒ {} ༒")
+ ("༄ تزئینی", "༄ {} ༄"), ("𓆩 قاب ۱", "𓆩 {} 𓆪"), ("⫷ قاب ۲", "⫷ {} ⫸"), ("༒ تاریک", "༒ {} ༒"),
+ ("➶ پروازی", "➶ {} ➷"), ("✧ درخشش", "✧･ﾟ {} ﾟ･✧"), ("❖ الماسی", "❖ {} ❖"), ("☘ طبیعت", "☘ {} ☘"),
+ ("⚜ کلاسیک", "⚜ {} ⚜"), ("♕ تاج", "♕ {} ♕"), ("♛ تاج تیره", "♛『{}』♛"), ("𖤐 ستاره تاریک", "𖤐 {} 𖤐"),
+ ("𓂀 چشم", "𓂀 {} 𓂀"), ("⟦ قاب ضخیم", "⟦ {} ⟧"), ("⟪ قاب دوتایی", "⟪ {} ⟫"), ("〔 قاب نرم", "〔 {} 〕"),
+ ("〘 قاب تزئینی", "〘 {} 〙"), ("⌁ موج", "⌁ {} ⌁"), ("≈ موجی", "≈ {} ≈"), ("⊹ ستاره ریز", "⊹ {} ⊹"),
+ ("✿ گل", "✿ {} ✿"), ("❀ گل ۲", "❀ {} ❀"), ("❁ گل ۳", "❁ {} ❁"), ("ꕤ گل ۴", "ꕤ {} ꕤ"),
+ ("𑁍 گل ۵", "𑁍 {} 𑁍"), ("୨୧ روبان", "୨୧ {} ୨୧"), ("୭ روبان ۲", "୭ {} ୭"), ("ღ تزئینی", "ღ• {} •ღ"),
+ ("⛧ گوتیک", "⛧ {} ⛧"), ("† صلیبی", "† {} †"), ("‡ صلیبی ۲", "‡ {} ‡"), ("⛥ نماد ۲", "⛥ {} ⛥"),
+ ("⟡ منشوری", "⟡ {} ⟡"), ("◈ لوزی", "◈ {} ◈"), ("◇ لوزی توخالی", "◇ {} ◇"), ("◆ لوزی پر", "◆ {} ◆"),
+ ("◉ دایره", "◉ {} ◉"), ("◎ دایره ۲", "◎ {} ◎"), ("◌ دایره ۳", "◌ {} ◌"), ("● نقطه پر", "● {} ●"),
+ ("◍ نقطه ۲", "◍ {} ◍"), ("◐ نیم‌دایره", "◐ {} ◑"), ("◜ گوشه‌ای", "◜ {} ◝"), ("◞ گوشه‌ای ۲", "◞ {} ◟"),
+ ("╰ قاب پایین", "╰ {} ╯"), ("╭ قاب بالا", "╭ {} ╮"), ("┊ خطی", "┊ {} ┊"), ("║ دوخطی", "║ {} ║"),
+ ("═ خط افقی", "═ {} ═"), ("╳ ضربدر", "╳ {} ╳"), ("※ نشانه", "※ {} ※"), ("⁂ گل‌ستاره", "⁂ {} ⁂"),
+ ("༺༻ قاب سلطنتی", "༺═ {} ═༻"), ("꧁༺ قاب فانتزی", "꧁༺ {} ༻꧂"), ("★ ستاره توپر", "★彡 {} 彡★"), ("☆ ستاره توخالی", "☆ﾟ.* {} *.ﾟ☆"),
+ ("☁ ابری", "☁ {} ☁"), ("☄ دنباله‌دار", "☄ {} ☄"), ("☼ خورشید", "☼ {} ☼"), ("☽ ماه ۲", "☽ {} ☾"),
+ ("♬ موسیقی", "♬ {} ♬"), ("♪ موسیقی ۲", "♪ {} ♪"), ("❣ قلب ۳", "❣ {} ❣"), ("♥ قلب ۴", "♥ {} ♥"),
+ ("ღ قلب ۵", "ღღ {} ღღ"), ("✪ ستاره ۳", "✪ {} ✪"), ("✰ ستاره ۴", "✰ {} ✰"), ("✵ ستاره ۵", "✵ {} ✵")
 ]
 def font_variants(text):
     variants=[]
     has_persian = bool(re.search(r"[\u0600-\u06ff]", text))
-    # Persian/Arabic letters have no broadly supported Unicode mathematical font alphabets.
-    # For Persian words, the first 18 styles therefore add distinct frames while Latin is mapped.
+    # Persian/Arabic letters lack broadly supported Unicode mathematical alphabets;
+    # the decorative styles preserve the original letters instead of claiming a false conversion.
     for i, mapping in enumerate(FONT_MAPS):
         name = FONT_NAMES[i] if i < len(FONT_NAMES) else f"سبک {i+1}"
         converted = text.translate(mapping)
@@ -394,8 +404,35 @@ def font_variants(text):
         variants.append((name, converted))
     for name, wrapper in FONT_WRAPPERS:
         variants.append((name, wrapper.format(text)))
-    # Exactly 50 variants: real Unicode variants for Latin, decorative styles for Persian.
-    return variants[:50]
+    # Return 100 distinct numbered styles (Unicode mappings plus decorative variants).
+    unique=[]; seen=set()
+    for name, value in variants:
+        if value not in seen:
+            seen.add(value); unique.append((name, value))
+        if len(unique) >= 100: break
+    # If duplicate input styles reduce the count, make remaining decorative variants unique.
+    for i, (name, wrapper) in enumerate(FONT_WRAPPERS):
+        if len(unique) >= 100: break
+        value=wrapper.format(text) + (" " * (i+1))
+        if value not in seen:
+            seen.add(value); unique.append((name, value))
+    return unique[:100]
+
+def send_font_results(message, raw):
+    raw=(raw or "").strip()
+    if not raw:
+        bot.reply_to(message, "🔤 بعد از کلمهٔ «فونت»، متن دلخواهت را هم بنویس؛ مثلاً: فونت مسیح")
+        return
+    if len(raw)>120:
+        bot.reply_to(message, "برای نمایش ۱۰۰ مدل فونت، متن حداکثر ۱۲۰ نویسه باشد.")
+        return
+    variants=font_variants(raw)
+    for start in range(0, len(variants), 10):
+        lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10], start=start+1)]
+        heading=("🔤 <b>۱۰۰ مدل فونت برای متن تو</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,len(variants))})</b>\n━━━━━━━━━━━━━━\n")
+        kwargs={"parse_mode":"HTML"}
+        if start==0: kwargs["reply_to_message_id"]=message.message_id
+        bot.send_message(message.chat.id, heading+"\n\n".join(lines), **kwargs)
 def convert_font(text, style=0):
     variants = font_variants(text)
     return variants[style % len(variants)][1]
@@ -887,6 +924,77 @@ def _handle_group_shortcut(message, text):
         bot.reply_to(message, "⚠️ انجام دستور ناموفق بود؛ دسترسی ادمین ربات و مجوزهای گروه را بررسی کن.")
     return True
 
+GAME_EMOJIS = {
+    "بسکتبال": "🏀", "فوتبال": "⚽", "بولینگ": "🎳",
+    "دارت": "🎯", "تاس": "🎲", "اسلات": "🎰"
+}
+
+def game_menu_text():
+    return ("🎮 <b>بازی‌های MASIH GUARD</b>\n━━━━━━━━━━━━━━\n"
+            "برای اجرای هر بازی، عبارت نمونه را بفرست:\n"
+            "🏀 بازی بسکتبال\n⚽ بازی فوتبال\n🎳 بازی بولینگ\n"
+            "🎯 بازی دارت\n🎲 بازی تاس\n🎰 بازی اسلات\n\n"
+            "امتیاز هر بازی پس از دریافت نتیجه ذخیره می‌شود؛ در بازی اسلات امتیاز بر اساس نتیجهٔ تلگرام محاسبه می‌شود.")
+
+def play_telegram_game(message, game_name):
+    emoji = GAME_EMOJIS.get(game_name)
+    if not emoji:
+        bot.reply_to(message, game_menu_text(), parse_mode="HTML")
+        return
+    try:
+        result = bot.send_dice(message.chat.id, emoji=emoji, reply_to_message_id=message.message_id)
+        value = int(getattr(getattr(result, "dice", None), "value", 0) or 0)
+        uid = int(message.from_user.id)
+        # Keep scoring simple and persistent; slots award more for a high-value outcome.
+        points = (10 if value == 64 else value) if game_name == "اسلات" else value
+        DATA.setdefault("points", {})[str(uid)] = int(DATA.setdefault("points", {}).get(str(uid), 0)) + points
+        DATA.setdefault("game_results", {}).setdefault(str(uid), []).append({"game": game_name, "value": value, "points": points, "time": now_text()})
+        DATA["game_results"][str(uid)] = DATA["game_results"][str(uid)][-100:]
+        save_data()
+        bot.send_message(message.chat.id, f"🎮 نتیجهٔ {game_name}: {value}\n⭐ امتیاز این دور: {points}\n🏆 مجموع امتیاز ذخیره‌شده: {DATA['points'][str(uid)]}", reply_to_message_id=message.message_id)
+    except Exception as e:
+        print("Game error:", repr(e))
+        bot.reply_to(message, "⚠️ اجرای بازی ممکن نشد؛ نسخهٔ تلگرام یا دسترسی ربات را بررسی کن.")
+
+def activate_current_group_from_phrase(message, days):
+    if not is_owner(message.from_user.id if message.from_user else 0):
+        bot.reply_to(message, "⛔ فعال‌سازی اشتراک گروه فقط برای مالک اصلی مجاز است.")
+        return True
+    chat = message.chat
+    if chat.type not in ("group", "supergroup"):
+        return False
+    try:
+        me = bot.get_me()
+        member = bot.get_chat_member(chat.id, me.id)
+        if getattr(member, "status", "") not in ("administrator", "member"):
+            bot.reply_to(message, "⚠️ ابتدا ربات را به گروه اضافه کن.")
+            return True
+        from datetime import timedelta
+        licenses = DATA.setdefault("group_licenses", {})
+        old = licenses.get(str(chat.id), {})
+        now = datetime.now()
+        if old.get("approved") and not old.get("expires"):
+            bot.reply_to(message, "ℹ️ این گروه مجوز دائمی دارد؛ مجوز تازه‌ای ثبت نشد.")
+            return True
+        if old.get("approved") and old.get("expires"):
+            try:
+                if datetime.strptime(old["expires"], "%Y-%m-%d %H:%M:%S") > now:
+                    bot.reply_to(message, "ℹ️ این گروه هم‌اکنون اشتراک فعال دارد؛ برای جلوگیری از تمدید ناخواسته، تغییری انجام نشد.")
+                    return True
+            except Exception:
+                pass
+        expires = "" if days == 0 else (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        licenses[str(chat.id)] = {"approved": True, "expires": expires, "activated_by": int(message.from_user.id), "updated": now_text(), "days": days, "title": getattr(chat, "title", "")}
+        DATA.setdefault("subscriptions", {})[str(chat.id)] = {"days": days, "started": now_text(), "expires": expires, "status": "active", "source": "group_phrase"}
+        add_log("group_subscription_activated", chat.id, message.from_user.id, f"days={days}")
+        save_data()
+        length = "دائمی" if days == 0 else f"{days} روز"
+        bot.reply_to(message, f"✅ اشتراک MASIH GUARD برای این گروه فعال شد.\n📅 مدت اشتراک: {length}\n🕒 پایان اعتبار: {expires or 'دائمی'}\n👑 مدیریت و پشتیبانی: مسیح مختاری")
+    except Exception as e:
+        print("Group phrase activation error:", repr(e))
+        bot.reply_to(message, "⚠️ فعال‌سازی انجام نشد؛ حضور ربات و دسترسی‌های لازم را بررسی کن.")
+    return True
+
 @bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
 def group_message_handler(message):
     global BOT_USERNAME, BOT_ID
@@ -908,6 +1016,20 @@ def group_message_handler(message):
             else:
                 bot.reply_to(message, "سلام! 👋 مسیح گارد فعاله. برای استفاده از امکانات خصوصی، ربات را در پیوی باز کن.")
             return
+        normalized_phrase = re.sub(r"[\u200c\s]+", " ", (text or "").replace("ي", "ی").replace("ك", "ک").strip()).casefold()
+        match = re.fullmatch(r"(?:فعال سازی مسیح گارد|ثبت اشتراک) (30|60|90|۳۰|۶۰|۹۰) روزه?", normalized_phrase)
+        if match:
+            days_token = match.group(1).translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+            if days_token in {"30", "60", "90"}:
+                activate_current_group_from_phrase(message, int(days_token))
+                return
+        if normalized_phrase == "بازی":
+            if is_group_licensed(message.chat.id): bot.reply_to(message, game_menu_text(), parse_mode="HTML")
+            return
+        game_match = re.fullmatch(r"بازی (بسکتبال|فوتبال|بولینگ|دارت|تاس|اسلات)", normalized_phrase)
+        if game_match:
+            if is_group_licensed(message.chat.id): play_telegram_game(message, game_match.group(1))
+            return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
             req = DATA.setdefault("group_requests", {})
@@ -917,6 +1039,14 @@ def group_message_handler(message):
                 req[key] = time.time(); save_data()
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
+            return
+        # Public font shortcut: any text after «فونت» is the text to stylize, not a style name.
+        normalized_font = text.replace("ي", "ی").replace("ك", "ک").strip() if text else ""
+        if normalized_font and normalized_font.casefold().startswith("فونت "):
+            send_font_results(message, normalized_font[5:].strip())
+            return
+        if normalized_font and normalized_font.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
+            bot.reply_to(message, "🔤 متن دلخواهت را به شکل «فونت متن‌دلخواه» بفرست تا ۱۰۰ مدل دریافت کنی.")
             return
         # Route AI replies and commands before generic handlers: this group catch-all is registered first.
         if text and text.split()[0].split("@", 1)[0].casefold() in {"/ai", "/ask"}:
@@ -1354,7 +1484,7 @@ def handle_show(uid, action):
             f"🌐 وب‌سایت: {esc(cfg.get('website_url', WEBSITE_URL))}")
 
 # ---------------- Commands and callbacks ----------------
-@bot.message_handler(commands=["start","panel","help"])
+@bot.message_handler(commands=["start"])
 def start_command(message):
     uid=message.from_user.id if message.from_user else 0
     if message.chat.type=="private":
@@ -1404,6 +1534,31 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.", show_alert=True); return
             if not is_owner(uid) and data != "panel:open":
                 bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
+        if data.startswith("deposit:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id, "⛔ فقط مالک می‌تواند رسید را بررسی کند.", show_alert=True); return
+            parts = data.split(":", 3)
+            if len(parts) != 4 or parts[1] not in {"approve", "reject"}:
+                bot.answer_callback_query(call.id, "درخواست رسید نامعتبر است.", show_alert=True); return
+            deposit_id = parts[2] + ":" + parts[3]
+            item = DATA.setdefault("pending_deposits", {}).get(deposit_id)
+            if not item or item.get("status") != "pending":
+                bot.answer_callback_query(call.id, "این رسید قبلاً بررسی شده یا وجود ندارد.", show_alert=True); return
+            if parts[1] == "reject":
+                item["status"] = "rejected"; item["reviewed_at"] = now_text(); item["reviewed_by"] = uid
+                save_data(); add_log("deposit_rejected", "", item.get("user_id", ""), f"deposit={deposit_id}")
+                try: bot.send_message(int(item["user_id"]), "❌ رسید افزایش موجودی تأیید نشد. اگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
+                except Exception: pass
+                bot.answer_callback_query(call.id, "رسید رد شد.")
+                try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+                except Exception: pass
+                bot.send_message(uid, f"❌ رسید کاربر {item.get('user_id')} رد شد.")
+                return
+            target_uid = int(item.get("user_id", 0))
+            WAITING[uid] = {"action": "deposit_approve_amount", "target_uid": target_uid, "deposit_id": deposit_id}
+            bot.answer_callback_query(call.id, "مبلغ را وارد کن.")
+            bot.send_message(uid, f"💳 رسید کاربر <code>{target_uid}</code> بررسی شد. مبلغی را که واقعاً دریافت کرده‌ای به تومان وارد کن؛ فقط پس از تأیید واریز. برای لغو بنویس «لغو».")
+            return
         if data.startswith("payout:"):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
@@ -1443,7 +1598,7 @@ def callback_handler(call):
                 WAITING[uid]={"action":"payout_amount"}
                 bot.answer_callback_query(call.id); bot.send_message(uid, f"💸 مبلغ برداشت را به تومان وارد کن. موجودی فعلی: {wallet(uid):,} تومان\nروش پرداخت را بعداً با مالک هماهنگ می‌کنی؛ اطلاعات بانکی را اینجا نفرست."); return
             if data=="user:font":
-                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
+                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۱۰۰ مدل فونت رایگان است. متن دلخواه را بفرست تا تبدیل شود."); return
             if data=="user:proxies":
                 bot.answer_callback_query(call.id)
                 bot.send_message(uid,proxy_list_text(limit=10, with_ping=False)); return
@@ -1531,7 +1686,7 @@ def callback_handler(call):
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"عکس را همین‌جا به‌صورت تصویر تلگرام بفرست تا file_id ذخیره شود؛ یا لینک مستقیم https:// بفرست. برای حذف بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
@@ -1584,17 +1739,20 @@ def private_text_handler(message):
         except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
         return
     # Direct public tools work without opening a panel first.
+    normalized_game = re.sub(r"[\u200c\s]+", " ", text.replace("ي", "ی").replace("ك", "ک").strip()).casefold()
+    if normalized_game == "بازی":
+        bot.reply_to(message, game_menu_text(), parse_mode="HTML"); return
+    game_match = re.fullmatch(r"بازی (بسکتبال|فوتبال|بولینگ|دارت|تاس|اسلات)", normalized_game)
+    if game_match:
+        play_telegram_game(message, game_match.group(1)); return
     if text.casefold() in {"پروکسی", "پروکسی‌ها", "پروکسی ها"}:
         bot.send_message(uid,proxy_list_text(limit=10, with_ping=False))
         return
-    if text.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
-        WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
-    if text.casefold().startswith("فونت "):
-        raw=text[5:].strip()
-        if len(raw)>120:
-            bot.send_message(uid,"برای نمایش ۵۰ سبک، متن حداکثر ۱۲۰ نویسه باشد."); return
-        WAITING[uid]={"action":"public_font_name","font_text":raw}
-        bot.send_message(uid,"اسم دلخواه را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم."); return
+    normalized_font = text.replace("ي", "ی").replace("ك", "ک").strip()
+    if normalized_font.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
+        bot.reply_to(message,"🔤 متن دلخواهت را به شکل «فونت متن‌دلخواه» بفرست تا ۱۰۰ مدل دریافت کنی."); return
+    if normalized_font.casefold().startswith("فونت "):
+        send_font_results(message, normalized_font[5:].strip()); return
     public_shortcuts = {
         "کیف پول": "user:wallet", "موجودی": "user:wallet", "wallet": "user:wallet",
         "افزایش موجودی": "user:deposit", "شارژ کیف پول": "user:deposit", "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
@@ -1612,6 +1770,31 @@ def private_text_handler(message):
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
+    if action == "deposit_approve_amount":
+        if text.casefold() in {"لغو", "cancel", "/cancel"}:
+            WAITING.pop(uid, None); bot.send_message(uid, "عملیات شارژ رسید لغو شد؛ رسید همچنان در انتظار بررسی است."); return
+        try:
+            amount = int(text.replace(",", "").replace("٬", "").replace(" ", ""))
+            if not 1 <= amount <= 10000000:
+                raise ValueError
+        except (ValueError, TypeError):
+            bot.send_message(uid, "⚠️ مبلغ معتبر نیست. مبلغ واقعی دریافتی را به تومان وارد کن یا برای لغو بنویس «لغو»."); return
+        deposit_id = str(pending.get("deposit_id", ""))
+        item = DATA.setdefault("pending_deposits", {}).get(deposit_id)
+        target_uid = int(pending.get("target_uid", 0))
+        if not item or item.get("status") != "pending" or int(item.get("user_id", 0)) != target_uid:
+            WAITING.pop(uid, None); bot.send_message(uid, "⚠️ این رسید دیگر در انتظار تأیید نیست یا شناسهٔ آن معتبر نیست."); return
+        # Mark first so transaction() persists the approved state and balance together.
+        item["status"] = "approved"; item["amount_toman"] = amount; item["reviewed_at"] = now_text(); item["reviewed_by"] = uid
+        if not transaction(target_uid, amount, f"افزایش موجودی با رسید تأییدشده {deposit_id}"):
+            item["status"] = "pending"; item.pop("amount_toman", None); item.pop("reviewed_at", None); item.pop("reviewed_by", None)
+            save_data(); bot.send_message(uid, "⚠️ ثبت تراکنش ناموفق بود؛ موجودی تغییر نکرد."); return
+        save_data(); add_log("deposit_approved", "", target_uid, f"amount_toman={amount}; deposit={deposit_id}")
+        WAITING.pop(uid, None)
+        bot.send_message(uid, f"✅ رسید تأیید و {amount:,} تومان به کیف پول کاربر {target_uid} اضافه شد. موجودی جدید: {wallet(target_uid):,} تومان")
+        try: bot.send_message(target_uid, f"✅ رسید پرداختت تأیید شد. مبلغ شارژشده: {amount:,} تومان\n💳 موجودی جدید: {wallet(target_uid):,} تومان")
+        except Exception: pass
+        return
     if action == "deposit_receipt":
         if text.casefold() in {"لغو", "cancel", "/cancel"}:
             WAITING.pop(uid, None)
@@ -1619,7 +1802,7 @@ def private_text_handler(message):
         else:
             bot.send_message(uid, "برای تکمیل افزایش موجودی، لطفاً تصویر رسید واریز را به‌صورت عکس یا فایل همین‌جا بفرست. برای لغو بنویس «لغو».")
         return
-    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
+    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action","deposit_approve_amount",
                 "public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
                 "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group"}
     if action in owner_only and not is_owner(uid):
@@ -1692,7 +1875,7 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"عکس را همین‌جا به‌صورت تصویر تلگرام بفرست تا file_id ذخیره شود؛ یا لینک مستقیم https:// بفرست. برای حذف بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
         if action=="whitelist":
             target=int(text)
@@ -1850,25 +2033,19 @@ def private_text_handler(message):
                 bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
             except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
         elif action == "public_font_text":
-            if len(text) > 120: raise ValueError("برای نمایش ۵۰ سبک، متن حداکثر ۱۲۰ نویسه باشد.")
-            WAITING[uid]={"action":"public_font_name","font_text":text}
-            bot.send_message(uid,"حالا اسم دلخواهت را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم.")
+            WAITING.pop(uid, None)
+            send_font_results(message, text)
             return
         elif action == "public_font_name":
+            # Compatibility with any older pending state: convert the stored text, ignore title input.
             raw=pending.get("font_text", "")
-            label="" if text.casefold() in {"بدون اسم","ندارد","نه"} else text[:50]
-            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>۵۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
-            variants=font_variants(raw)
-            for start in range(0, 50, 10):
-                lines=[]
-                for idx,(name,value) in enumerate(variants[start:start+10], start=start+1):
-                    lines.append(f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>")
-                bot.send_message(uid, (heading if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,50)})</b>\n━━━━━━━━━━━━━━\n") + "\n\n".join(lines))
+            WAITING.pop(uid, None)
+            send_font_results(message, raw)
+            return
         elif action in ("public_font","font"):
-            variants=font_variants(text[:120])
-            for start in range(0,50,10):
-                lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10],start=start+1)]
-                bot.send_message(uid, ("🔤 <b>۵۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,50)})</b>\n━━━━━━━━━━━━━━\n")+"\n\n".join(lines))
+            WAITING.pop(uid, None)
+            send_font_results(message, text[:120])
+            return
         elif action in ("welcome_text","farewell_text","rules"):
             s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
         elif action=="auto_reply":
@@ -1938,7 +2115,7 @@ def private_text_handler(message):
         elif action.startswith("show_"): handle_show(uid,action[5:])
         else:
             WAITING.pop(uid,None)
-            bot.send_message(uid,"⚠️ این گزینه به این نسخه متصل نشده است. پنل را از /panel باز کن و اگر تکرار شد، نام همان دکمه را برای اصلاح بفرست.")
+            bot.send_message(uid, f"⚠️ عملیات «{esc(action or 'نامشخص')}» هنوز به عملکردی متصل نشده است؛ این گزینه نیاز به تکمیل جداگانه دارد. از دکمهٔ مدیریت برای برگشت استفاده کن.")
             return
         WAITING.pop(uid,None)
     except (ValueError,TypeError,PermissionError) as e:
@@ -1950,6 +2127,18 @@ def private_text_handler(message):
 def private_deposit_receipt_handler(message):
     uid = message.from_user.id if message.from_user else 0
     pending = WAITING.get(uid, {})
+    if pending.get("action") == "welcome_image" and is_owner(uid):
+        if message.content_type == "photo" and message.photo:
+            file_id = message.photo[-1].file_id
+            # Save the Telegram file_id for each already-configured group; it remains reusable.
+            for group_id in list(DATA.get("groups", {})):
+                get_group_settings(group_id)["welcome_image"] = file_id
+            DATA.setdefault("bot_settings", {}).setdefault("welcome_image_file_id", file_id)
+            save_data(); WAITING.pop(uid, None)
+            bot.reply_to(message, "✅ عکس خوشامد با file_id تلگرام ذخیره شد. برای گروه‌های تنظیم‌شده استفاده می‌شود.")
+        else:
+            bot.reply_to(message, "🖼 لطفاً عکس را به‌صورت تصویر تلگرام بفرست؛ لینک اجباری نیست.")
+        return
     if pending.get("action") != "deposit_receipt":
         return
     user = message.from_user
@@ -1963,12 +2152,31 @@ def private_deposit_receipt_handler(message):
                f"🕒 زمان دریافت: {esc(now_text())}\n"
                "⚠️ رسید را بررسی کن؛ تا قبل از تأیید، موجودی را شارژ نکن.")
     try:
-        bot.send_message(OWNER_ID, caption)
+        file_unique_id = ""
+        if message.content_type == "photo" and message.photo:
+            file_unique_id = str(message.photo[-1].file_unique_id)
+        elif message.content_type == "document" and message.document:
+            file_unique_id = str(message.document.file_unique_id)
+        if file_unique_id:
+            for existing in DATA.setdefault("pending_deposits", {}).values():
+                if int(existing.get("user_id", 0)) == uid and existing.get("file_unique_id") == file_unique_id:
+                    bot.reply_to(message, "⚠️ همین رسید قبلاً ارسال شده؛ از ارسال تکراری خودداری کن.")
+                    return
+        deposit_id = f"{uid}:{message.message_id}"
+        DATA.setdefault("pending_deposits", {})[deposit_id] = {
+            "user_id": uid, "file_unique_id": file_unique_id, "status": "pending",
+            "created": now_text(), "username": username, "first_name": first_name
+        }
+        save_data()
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(types.InlineKeyboardButton("✅ تأیید رسید", callback_data=f"deposit:approve:{uid}:{message.message_id}"),
+               types.InlineKeyboardButton("❌ رد رسید", callback_data=f"deposit:reject:{uid}:{message.message_id}"))
+        bot.send_message(OWNER_ID, caption + "\n\n👇 پس از بررسی واقعی واریز، رسید را تأیید یا رد کن.", reply_markup=kb)
         bot.forward_message(OWNER_ID, uid, message.message_id)
         WAITING.pop(uid, None)
-        add_log("deposit_receipt_received", "", uid, f"username={username}; first_name={first_name}")
+        add_log("deposit_receipt_received", "", uid, f"username={username}; first_name={first_name}; deposit={deposit_id}")
         save_data()
-        bot.reply_to(message, "✅ رسیدت برای مالک ارسال شد. بعد از بررسی و تأیید، موجودی شارژ می‌شود. شناسه عددی تو برای مالک هم ارسال شد.")
+        bot.reply_to(message, "✅ رسیدت برای مالک ارسال شد. پس از بررسی و تأیید مبلغ واقعی واریز، موجودی شارژ می‌شود. شناسه عددی تو برای مالک هم ارسال شد.")
     except Exception as e:
         print("Deposit receipt forwarding error:", repr(e))
         bot.reply_to(message, "⚠️ ارسال رسید ناموفق شد. لطفاً چند لحظه بعد دوباره بفرست یا به سازنده @Ma3ih01 پیام بده.")
