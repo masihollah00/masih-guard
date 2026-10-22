@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """MASIH GUARD S1000+ — single-file Telegram group management bot."""
-import os, re, json, time, random, threading, io, urllib.request, urllib.error, html
+import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket
+from urllib.parse import urlparse, parse_qs
 from datetime import datetime, date
 import telebot
 from telebot import types
@@ -288,6 +289,12 @@ def section_keyboard(section):
     return kb
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
+    # The management panel and all its replies must remain in the owner's private chat.
+    if user_id is not None and (not is_owner(user_id) or int(chat_id) != int(user_id)):
+        if user_id:
+            try: bot.send_message(user_id, "🔐 پنل مدیریت فقط در گفت‌وگوی خصوصی مالک باز می‌شود. برای بازکردن آن /panel را در خصوصی ربات بفرست.")
+            except Exception: pass
+        return
     if user_id is not None: PANEL_CURRENT[user_id] = section
     if section == "home":
         text = f"🌈 <b>{BRAND} {VERSION}</b>\n━━━━━━━━━━━━━━━━━━\n👑 پنل مدیریت اختصاصی مالک\n\nیکی از بخش‌ها را انتخاب کن."
@@ -355,12 +362,20 @@ FONT_WRAPPERS = [
 ]
 def font_variants(text):
     variants=[]
+    has_persian = bool(re.search(r"[\u0600-\u06ff]", text))
+    # Persian/Arabic letters have no broadly supported Unicode mathematical font alphabets.
+    # For Persian words, the first 18 styles therefore add distinct frames while Latin is mapped.
     for i, mapping in enumerate(FONT_MAPS):
         name = FONT_NAMES[i] if i < len(FONT_NAMES) else f"سبک {i+1}"
-        variants.append((name, text.translate(mapping)))
+        converted = text.translate(mapping)
+        if has_persian and i < len(FONT_WRAPPERS):
+            wrapper_name, wrapper = FONT_WRAPPERS[i]
+            converted = wrapper.format(converted)
+            name = f"{name} + {wrapper_name}"
+        variants.append((name, converted))
     for name, wrapper in FONT_WRAPPERS:
         variants.append((name, wrapper.format(text)))
-    # Ensure precisely 50 styles, preserving order.
+    # Exactly 50 variants: real Unicode variants for Latin, decorative styles for Persian.
     return variants[:50]
 def convert_font(text, style=0):
     variants = font_variants(text)
@@ -430,22 +445,30 @@ def transactions_text(uid):
         for x in reversed(rows))
 
 def daily_reward(uid):
-    u = ensure_user(uid)
-    if u.get("last_daily") == today(): return "⏳ پاداش روزانه‌ات را امروز گرفته‌ای؛ فردا دوباره بیا."
-    amount = max(0, min(100000, int(bot_settings().get("daily_reward", 10))))
-    u["last_daily"] = today()
-    transaction(uid, amount, "پاداش روزانه")
-    save_data()
+    with LOCK:
+        u = ensure_user(uid)
+        if u.get("last_daily") == today():
+            return "⏳ پاداش روزانه‌ات را امروز گرفته‌ای؛ فردا دوباره بیا."
+        amount = max(0, min(100000, int(bot_settings().get("daily_reward", 10))))
+        u["last_daily"] = today()
+        if not transaction(uid, amount, "پاداش روزانه"):
+            u["last_daily"] = ""
+            raise RuntimeError("ثبت پاداش روزانه ناموفق بود")
+        save_data()
     return f"🎁 {amount} الماس پاداش روزانه گرفتی!\n💎 موجودی: {wallet(uid)}"
 
 def luck_reward(uid):
-    u = ensure_user(uid)
-    if u.get("last_luck") == today(): return "🍀 شانس روزانه‌ات را امروز امتحان کرده‌ای؛ فردا دوباره بیا."
-    u["last_luck"] = today()
-    maximum = max(0, min(1000, int(bot_settings().get("luck_max", 5))))
-    amount = random.randint(0, maximum)
-    if amount: transaction(uid, amount, "شانس روزانه")
-    else: save_data()
+    with LOCK:
+        u = ensure_user(uid)
+        if u.get("last_luck") == today():
+            return "🍀 شانس روزانه‌ات را امروز امتحان کرده‌ای؛ فردا دوباره بیا."
+        maximum = max(0, min(1000, int(bot_settings().get("luck_max", 5))))
+        amount = random.randint(0, maximum)
+        u["last_luck"] = today()
+        if amount:
+            transaction(uid, amount, "شانس روزانه")
+        else:
+            save_data()
     return f"🍀 نتیجه شانس امروز: {amount} الماس!\n💎 موجودی: {wallet(uid)}"
 
 def buy_subscription(uid, diamonds, days):
@@ -689,9 +712,10 @@ def bot_added_or_removed(update):
                 print("Owner group request notice error:", repr(owner_error))
             try:
                 bot.send_message(chat.id, group_install_message(chat.id, getattr(chat,"title", "این گروه")), reply_markup=support_contact_markup())
-            finally:
-                try: bot.leave_chat(chat.id)
-                except Exception as leave_error: print("Leave unlicensed group error:", repr(leave_error))
+            except Exception as group_notice_error:
+                print("Unlicensed group notice error:", repr(group_notice_error))
+            # Stay in the group but remain inert until the owner approves its license.
+            # This allows the group to receive the one activation confirmation later.
     except Exception as e:
         print("Group license handler error:", repr(e))
 
@@ -789,6 +813,45 @@ def create_ticket(uid, username, text):
     except Exception as e: print("Ticket forwarding error:",repr(e))
     return tid
 
+def proxy_endpoint(proxy_url):
+    """Extract the server and port from Telegram proxy links without exposing secrets."""
+    try:
+        parsed = urlparse(str(proxy_url).strip())
+        query = parse_qs(parsed.query)
+        host = (query.get("server") or [""])[0].strip()
+        port = int((query.get("port") or ["0"])[0])
+        if not host or not (1 <= port <= 65535):
+            return None
+        return host, port
+    except (TypeError, ValueError):
+        return None
+
+def proxy_ping_ms(proxy_url, timeout=1.5):
+    """Measure TCP reachability/latency to a Telegram proxy endpoint (not a full Telegram handshake)."""
+    endpoint = proxy_endpoint(proxy_url)
+    if not endpoint:
+        return None
+    start = time.perf_counter()
+    try:
+        with socket.create_connection(endpoint, timeout=timeout):
+            return round((time.perf_counter() - start) * 1000)
+    except OSError:
+        return None
+
+def proxy_list_text(limit=20, with_ping=False):
+    items = DATA.get("proxies", [])[:limit]
+    if not items:
+        return "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است."
+    rows = []
+    for i, item in enumerate(items, 1):
+        if with_ping:
+            ping = proxy_ping_ms(item)
+            status = f"🟢 {ping} ms" if ping is not None else "🔴 در دسترس نیست/قالب نامعتبر"
+            rows.append(f"{i}. {status}\n<code>{esc(item)}</code>")
+        else:
+            rows.append(f"{i}. <code>{esc(item)}</code>")
+    return "🌐 <b>فهرست پروکسی‌ها</b>\n━━━━━━━━━━━━━━\n" + "\n\n".join(rows)
+
 def send_backup(chat_id):
     if not is_owner(chat_id): bot.send_message(chat_id,"⛔ نسخه پشتیبان فقط برای مالک است."); return
     f=io.BytesIO(json.dumps(DATA,ensure_ascii=False,indent=2).encode("utf-8")); f.name="masih_guard_backup.json"
@@ -820,6 +883,21 @@ def moderate_member(action,chat_id,user_id):
         return "🔊 محدودیت برداشته شد." if allowed else "🔇 عضو محدود شد."
     raise ValueError("عملیات ناشناخته است.")
 
+LOG_ACTION_LABELS = {
+    "referral": "ثبت زیرمجموعه", "subscription_bought": "خرید اشتراک",
+    "group_license_activated": "فعال‌سازی مجوز گروه", "group_license_extended": "تمدید مجوز گروه",
+    "group_license_revoked": "لغو مجوز گروه", "warning": "ثبت اخطار", "blocked": "مسدودسازی پیام",
+    "new_member": "ورود عضو", "member_left": "خروج عضو", "proxy_added": "افزودن پروکسی",
+    "proxy_deleted": "حذف پروکسی", "announcement": "ارسال اطلاعیه", "manual_ban": "مسدودسازی عضو",
+    "manual_kick": "اخراج عضو", "messages_cleaned": "پاک‌سازی پیام‌ها", "member_messages_cleaned": "پاک‌سازی پیام‌های عضو",
+    "message_pinned": "سنجاق پیام", "message_unpinned": "برداشتن سنجاق", "user_report": "گزارش تخلف",
+    "join_request_approved": "تأیید درخواست عضویت", "quiet_hours_set": "تنظیم ساعت سکوت",
+    "bot_setting_updated": "به‌روزرسانی تنظیمات ربات", "setting_toggled": "تغییر تنظیم گروه",
+}
+def log_action_label(value):
+    value = str(value or "")
+    return LOG_ACTION_LABELS.get(value, value.replace("_", " "))
+
 def _parse_log_time(value):
     try: return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S").timestamp()
     except (ValueError, TypeError): return 0
@@ -838,13 +916,13 @@ def handle_show(uid, action):
         bot.send_message(uid, "🛡 <b>وضعیت امنیت</b>\nامنیت هوشمند سراسری: " + ("روشن" if DATA.get("settings",{}).get("smart_security",True) else "خاموش") + f"\nگروه‌های دارای مجوز: {sum(1 for gid in DATA.get('group_licenses',{}) if is_group_licensed(gid))}\nگزارش‌های ذخیره‌شده: {len(DATA.get('logs',[]))}")
     elif action=="subscription_sales":
         rows=[x for x in DATA.get("logs",[]) if x.get("action") in {"subscription_bought","group_license_activated","group_license_extended","group_license_revoked"}][-30:]
-        text="\n".join(f"{esc(x.get('time'))} — {esc(x.get('action'))} — {esc(x.get('chat_id'))} — {esc(x.get('detail'))}" for x in reversed(rows))
+        text="\n".join(f"{esc(x.get('time'))} — {esc(log_action_label(x.get('action')))} — {esc(x.get('chat_id'))} — {esc(x.get('detail'))}" for x in reversed(rows))
         bot.send_message(uid,"💳 <b>فروش و تمدید اشتراک / مجوز</b>\n"+(text or "هنوز تراکنش یا تمدیدی ثبت نشده است."))
     elif action=="status": bot.send_message(uid,f"🚀 <b>{BRAND} {VERSION}</b>\nربات در حال اجراست.\nهوش مصنوعی: {'تنظیم شده' if AI_API_KEY else 'تنظیم نشده'}")
     elif action=="rules":
         p=WAITING.get(uid,{}); bot.send_message(uid,esc(get_group_settings(p.get("chat_id",uid))["rules"]))
     elif action=="proxies":
-        bot.send_message(uid,"\n".join(f"{i+1}. {esc(x)}" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "فهرست پروکسی‌ها خالی است.")
+        bot.send_message(uid,proxy_list_text(limit=20, with_ping=True))
     elif action=="group_licenses":
         rows=[]
         for gid,rec in list(DATA.setdefault("group_licenses",{}).items())[-50:]:
@@ -864,7 +942,7 @@ def handle_show(uid, action):
         rows=[f"• {esc(v.get('name'))} — <code>{esc(k)}</code>" for k,v in list(DATA["customers"].items())[:50]]
         bot.send_message(uid,"💼 <b>مشتریان</b>\n"+"\n".join(rows) if rows else "مشتری ثبت نشده است.")
     elif action=="logs":
-        rows=[f"{esc(x.get('time'))} — {esc(x.get('action'))} — {esc(x.get('detail'))}" for x in DATA["logs"][-20:]]
+        rows=[f"{esc(x.get('time'))} — {esc(log_action_label(x.get('action')))} — {esc(x.get('detail'))}" for x in DATA["logs"][-20:]]
         bot.send_message(uid,"🧾 <b>آخرین گزارش‌ها</b>\n"+"\n".join(rows) if rows else "گزارشی ثبت نشده است.")
     elif action=="backup": send_backup(uid)
     elif action=="daily":
@@ -877,11 +955,11 @@ def handle_show(uid, action):
     elif action=="points": bot.send_message(uid,f"🏆 امتیاز شما: {DATA['points'].get(str(uid),0)}")
     elif action=="tickets":
         rows=[(k,v) for k,v in DATA["tickets"].items() if v.get("user_id")==uid or is_owner(uid)]
-        bot.send_message(uid,"\n\n".join(f"🎫 <code>{esc(k)}</code> — {esc(v.get('status'))}\n{esc(v.get('text','')[:200])}" for k,v in rows[-15:]) if rows else "تیکتی ثبت نشده است.")
+        bot.send_message(uid,"\n\n".join(f"🎫 <code>{esc(k)}</code> — {'باز' if v.get('status') == 'open' else 'بسته'}\n{esc(v.get('text','')[:200])}" for k,v in rows[-15:]) if rows else "تیکتی ثبت نشده است.")
     elif action=="diamond_stats":
         bot.send_message(uid,f"💎 کاربران کیف پول‌دار: {len(DATA['users'])}\n👥 زیرمجموعه‌های ثبت‌شده: {len(DATA['referrals'])}\n⭐ اشتراک‌ها: {len(DATA['subscriptions'])}")
     elif action=="referral_stats":
-        bot.send_message(uid,f"👥 کل زیرمجموعه‌های ثبت‌شده: {len(DATA['referrals'])}\n💎 پاداش هر دعوت معتبر: ۵ الماس")
+        bot.send_message(uid,f"👥 کل زیرمجموعه‌های ثبت‌شده: {len(DATA['referrals'])}\n💎 پاداش هر دعوت معتبر: {max(0, int(bot_settings().get('referral_reward', 5)))} الماس")
     elif action=="shop": bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard())
     elif action=="bot_settings":
         cfg = bot_settings()
@@ -914,7 +992,11 @@ def start_command(message):
     if not is_owner(uid):
         bot.reply_to(message,"پنل مدیریت فقط در اختیار مالک ربات است؛ برای فهرست امکانات به گفت‌وگوی خصوصی ربات برو.")
         return
-    send_panel(message.chat.id,user_id=uid)
+    try:
+        bot.send_message(uid, "🔐 پنل مدیریت در گروه نمایش داده نمی‌شود؛ پنل خصوصی برایت باز شد.")
+    except Exception:
+        pass
+    send_panel(uid,user_id=uid)
 
 @bot.message_handler(commands=["id"])
 def id_command(message):
@@ -934,6 +1016,12 @@ def ai_command(message):
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
+        management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
+        if management_action:
+            if not call.message or call.message.chat.type != "private" or call.message.chat.id != uid:
+                bot.answer_callback_query(call.id, "پنل مدیریت فقط در گفت‌وگوی خصوصی مالک قابل استفاده است.", show_alert=True); return
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id, "فقط مالک ربات مجاز است.", show_alert=True); return
         if data.startswith("user:") or data.startswith("shop:"):
             if not call.message or call.message.chat.type!="private":
                 bot.answer_callback_query(call.id,"این گزینه را در گفت‌وگوی خصوصی ربات استفاده کن.",show_alert=True); return
@@ -950,7 +1038,7 @@ def callback_handler(call):
                 WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
             if data=="user:proxies":
                 bot.answer_callback_query(call.id)
-                bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است."); return
+                bot.send_message(uid,proxy_list_text(limit=10, with_ping=False)); return
             if data=="user:ticket":
                 WAITING[uid]={"action":"ticket"}; bot.answer_callback_query(call.id); bot.send_message(uid,"متن تیکت پشتیبانی را بفرست."); return
             if data=="user:ai":
@@ -1037,6 +1125,10 @@ def callback_handler(call):
                 WAITING[uid]={"action":"show_list_group","list_type":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست (مثلاً -1001234567890).")
                 return
+            if action == "rules":
+                WAITING[uid]={"action":"show_rules_group"}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا قوانین همان گروه نمایش داده شود.")
+                return
             WAITING[uid]={"action":"show_"+action,"chat_id":chat_id}
             bot.answer_callback_query(call.id); handle_show(uid,action); WAITING.pop(uid,None); return
         if data=="game:guess":
@@ -1055,7 +1147,7 @@ def private_text_handler(message):
     if text.startswith("/"): return
     # Direct public tools work without opening a panel first.
     if text.casefold()=="پروکسی":
-        bot.send_message(uid,"\n".join(f"{i+1}. <code>{esc(x)}</code>" for i,x in enumerate(DATA["proxies"][:10])) if DATA["proxies"] else "🌐 هنوز پروکسی‌ای توسط مالک ذخیره نشده است.")
+        bot.send_message(uid,proxy_list_text(limit=10, with_ping=False))
         return
     if text.casefold()=="فونت":
         WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 ۵۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۵ پیام ۱۰تایی نمایش داده می‌شود."); return
@@ -1069,7 +1161,8 @@ def private_text_handler(message):
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
-                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs"}
+                "public_features","channel_url","website_url","daily_reward","luck_max","referral_reward","shop_packages","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
+                "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
@@ -1110,6 +1203,12 @@ def private_text_handler(message):
             WAITING.pop(uid, None)
             bot.send_message(uid, message_text)
             return
+        if action=="show_rules_group":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            if not is_group_licensed(target): raise PermissionError("این گروه مجوز فعال ندارد.")
+            bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
+            WAITING.pop(uid,None); return
         if action=="show_list_group":
             target=int(text)
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
@@ -1153,7 +1252,7 @@ def private_text_handler(message):
                 blob=" ".join(str(row.get(k,"")) for k in ("time","action","chat_id","user_id","detail")).casefold()
                 if query in blob: rows.append(row)
                 if len(rows)>=20: break
-            result="\n\n".join(f"{esc(x.get('time'))} | {esc(x.get('action'))}\nگروه: <code>{esc(x.get('chat_id'))}</code> کاربر: <code>{esc(x.get('user_id'))}</code>\n{esc(x.get('detail'))}" for x in rows)
+            result="\n\n".join(f"{esc(x.get('time'))} | {esc(log_action_label(x.get('action')))}\nگروه: <code>{esc(x.get('chat_id'))}</code> کاربر: <code>{esc(x.get('user_id'))}</code>\n{esc(x.get('detail'))}" for x in rows)
             bot.send_message(uid,"🔎 <b>نتیجهٔ جست‌وجوی گزارش‌ها</b>\n"+(result or "موردی پیدا نشد."))
             WAITING.pop(uid,None); return
         if action=="group_stats":
@@ -1225,6 +1324,20 @@ def private_text_handler(message):
                 add_log("group_license_activated" if action=="activate_group" else "group_license_extended",target,uid,f"days={days}")
                 save_data()
                 bot.send_message(uid,f"✅ مجوز گروه <code>{target}</code> فعال شد.\n⭐ پایان مجوز: {esc(expires or 'دائمی')}")
+                # Only a NEW activation sends a confirmation to the group; panel replies stay private.
+                if action == "activate_group":
+                    try:
+                        bot.send_message(
+                            target,
+                            "🛡️ <b>مجوز نصب MASIH GUARD فعال شد!</b>\n"
+                            "━━━━━━━━━━━━━━━━━━\n"
+                            "✅ مجوز این گروه با موفقیت تأیید شد.\n"
+                            f"⭐ پایان اعتبار: {esc(expires or 'دائمی')}\n"
+                            "🌈 اکنون می‌توانید از امکانات ربات استفاده کنید."
+                        )
+                    except Exception as group_notice_error:
+                        print("Group activation notice error:", repr(group_notice_error))
+                        bot.send_message(uid,"⚠️ مجوز ثبت شد، اما پیام گروه ارسال نشد. مطمئن شو ربات داخل گروه است و اجازهٔ ارسال پیام دارد؛ سپس دوباره فعال‌سازی را انجام بده.")
         elif action=="announcement":
             if "|" not in text: raise ValueError("قالب: شناسه گروه | متن اطلاعیه")
             group_text,announcement=text.split("|",1); target=int(group_text.strip()); announcement=announcement.strip()
@@ -1266,7 +1379,8 @@ def private_text_handler(message):
             try:
                 cm=bot.get_chat_member(target,member)
                 full_name=" ".join(x for x in [getattr(cm.user,"first_name", ""),getattr(cm.user,"last_name", "")] if x)
-                status=getattr(cm,"status","نامشخص")
+                status_raw=getattr(cm,"status","unknown")
+                status={"creator":"مالک گروه","administrator":"مدیر","member":"عضو","restricted":"محدودشده","left":"خارج‌شده","kicked":"مسدودشده"}.get(status_raw,"نامشخص")
                 warnings=DATA["warnings"].get(f"{target}:{member}",0)
                 bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
             except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
@@ -1318,9 +1432,15 @@ def private_text_handler(message):
             if not is_group_licensed(target_chat): raise PermissionError("این گروه مجوز فعال ندارد.")
             bot.send_message(uid,moderate_member(action,target_chat,target_user))
         elif action=="add_proxy":
-            if not (text.startswith("https://t.me/proxy?") or text.startswith("http://t.me/proxy?") or text.startswith("tg://proxy?")): raise ValueError("لینک معتبر t.me/proxy یا tg://proxy وارد کن.")
+            if not (text.startswith("https://t.me/proxy?") or text.startswith("http://t.me/proxy?") or text.startswith("tg://proxy?")):
+                raise ValueError("لینک معتبر t.me/proxy یا tg://proxy وارد کن.")
+            if not proxy_endpoint(text): raise ValueError("این لینک سرور یا پورت معتبر ندارد؛ لینک کامل پروکسی را بفرست.")
             if text in DATA["proxies"]: bot.send_message(uid,"این پروکسی قبلاً ثبت شده است.")
-            else: DATA["proxies"].append(text); save_data(); add_log("proxy_added","",uid,text); bot.send_message(uid,"✅ پروکسی ذخیره شد.")
+            elif len(DATA["proxies"]) >= 20: raise ValueError("حداکثر ۲۰ پروکسی می‌توان ذخیره کرد؛ ابتدا یکی را حذف کن.")
+            else:
+                DATA["proxies"].append(text); save_data(); add_log("proxy_added","",uid,"پروکسی ثبت شد")
+                ping=proxy_ping_ms(text)
+                bot.send_message(uid,"✅ پروکسی ذخیره شد.\n"+(f"🟢 پاسخ سرور: {ping} ms (آزمایش اتصال TCP)" if ping is not None else "⚠️ اتصال به سرور در حال حاضر برقرار نشد؛ لینک ذخیره شده ولی ممکن است آفلاین باشد."))
         elif action=="delete_proxy":
             i=int(text)-1
             if not 0<=i<len(DATA["proxies"]): raise ValueError("شماره پروکسی معتبر نیست.")
@@ -1351,7 +1471,10 @@ def private_text_handler(message):
             else: bot.send_message(uid,f"این بار نه؛ عدد درست {answer} بود.")
             GAMES.pop(uid,None)
         elif action.startswith("show_"): handle_show(uid,action[5:])
-        else: bot.send_message(uid,"این عملیات هنوز پیاده‌سازی نشده است.")
+        else:
+            WAITING.pop(uid,None)
+            bot.send_message(uid,"⚠️ این گزینه به این نسخه متصل نشده است. پنل را از /panel باز کن و اگر تکرار شد، نام همان دکمه را برای اصلاح بفرست.")
+            return
         WAITING.pop(uid,None)
     except (ValueError,TypeError,PermissionError) as e:
         bot.send_message(uid,"⚠️ ورودی یا دسترسی معتبر نیست.\n"+esc(str(e)))
