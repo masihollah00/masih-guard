@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MASIH GUARD S1000+ — نسخه تکمیلی؛ تک‌فایلی مدیریت گروه تلگرام."""
+"""MASIH GUARD S1000+ — single-file Telegram group management bot."""
 import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, date
@@ -11,14 +11,13 @@ BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").st
 OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
 DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
-AI_API_URL = (os.getenv("AI_API_URL") or os.getenv("AI_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
-AI_BASE_URL = AI_API_URL  # سازگاری با تنظیم قدیمی هاست
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o-mini").strip()
+CARD_NUMBER = os.getenv("CARD_NUMBER", "").strip()
+CARD_HOLDER = os.getenv("CARD_HOLDER", "").strip()
 WEBSITE_URL = os.getenv("WEBSITE_URL", "https://neon-portfolio-7vhj.onrender.com").strip()
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33").strip()
 OWNER_CONTACT_URL = os.getenv("OWNER_CONTACT_URL", "https://t.me/Ma3ih01").strip()
-CARD_NUMBER = os.getenv("CARD_NUMBER", "").strip()
-CARD_HOLDER = os.getenv("CARD_HOLDER", "").strip()
 BRAND, VERSION = "MASIH GUARD", "S1000+"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است؛ آن را در Environment هاست قرار بده.")
@@ -39,7 +38,6 @@ DEFAULT_GROUP = {
     "welcome_text": "سلام {name}، به گروه خوش آمدی!", "farewell_text": "خداحافظ {name}",
     "auto_replies": {}, "custom_commands": {}, "phone_filter": False,
     "smart_security": True, "quiet_hours_on": False, "quiet_start": "23:00", "quiet_end": "07:00",
-    "flood_threshold": 7, "flood_window_seconds": 8,
     "welcome_image": "", "welcome_delete_seconds": 0
 }
 DEFAULT_DATA = {
@@ -54,8 +52,8 @@ DEFAULT_DATA = {
         "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
-    "subscription_requests": {}, "payout_requests": {}, "pending_deposits": {},
-    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {}, "unban_requests": {},
+    "subscription_requests": {}, "payout_requests": {},
+    "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}
 }
 
@@ -81,19 +79,25 @@ def load_data():
     data.setdefault("moderation_lists", {})
     data.setdefault("message_history", {})
     data.setdefault("group_requests", {})
-    data.setdefault("unban_requests", {})
     data.setdefault("group_stats", {})
     data.setdefault("active_members", {})
     data.setdefault("manager_roles", {})
     data.setdefault("subscription_requests", {})
     data.setdefault("payout_requests", {})
-    # Non-destructive compatibility: never erase old balances, transaction rows,
-    # or legacy user fields during startup. Any future migration must be backed up
-    # and explicitly approved before data is rewritten.
+    # Migration away from the retired diamond economy. Old diamond balances and
+    # histories are deliberately discarded instead of being misrepresented as Toman.
     if isinstance(data.get("users"), dict):
         for _user in data["users"].values():
             if isinstance(_user, dict):
+                _user.pop("diamonds", None)
                 _user.setdefault("wallet_toman", 0)
+                _user.pop("last_daily", None)
+                _user.pop("last_luck", None)
+    if isinstance(data.get("transactions"), dict):
+        # Clear only legacy diamond rows once; preserve new Toman transaction history.
+        for _key, _rows in list(data["transactions"].items()):
+            if isinstance(_rows, list) and any(isinstance(_row, dict) and "amount_toman" not in _row for _row in _rows):
+                data["transactions"][_key] = []
     for k, v in DEFAULT_DATA.items():
         if isinstance(v, dict) and not isinstance(data.get(k), dict): data[k] = clone(v)
         if isinstance(v, list) and not isinstance(data.get(k), list): data[k] = clone(v)
@@ -123,7 +127,8 @@ def ensure_user(uid, username="", first_name=""):
     key = str(int(uid))
     with LOCK:
         user = DATA["users"].setdefault(key, {"wallet_toman": 0, "username": "", "first_name": "", "joined": now_text()})
-        # Keep legacy fields intact; do not destroy user data during normal access.
+        # Remove legacy currency fields on every access as a final migration guard.
+        user.pop("diamonds", None)
         user.setdefault("wallet_toman", 0)
         if username: user["username"] = username
         if first_name: user["first_name"] = first_name
@@ -153,11 +158,6 @@ def get_group_settings(chat_id):
     if key not in DATA["groups"]: DATA["groups"][key] = clone(DEFAULT_GROUP)
     settings = DATA["groups"][key]
     for k, v in DEFAULT_GROUP.items(): settings.setdefault(k, clone(v))
-    # A Telegram file_id configured by the owner is reusable without an external image URL.
-    if not settings.get("welcome_image"):
-        shared_image = DATA.get("bot_settings", {}).get("welcome_image_file_id", "")
-        if shared_image:
-            settings["welcome_image"] = shared_image
     return settings
 
 def group_license_status(chat_id):
@@ -190,11 +190,68 @@ def group_install_message(chat_id, title="این گروه"):
 def bot_settings():
     """Return current Toman settings; legacy diamond settings are removed."""
     settings = DATA.setdefault("bot_settings", clone(DEFAULT_DATA["bot_settings"]))
-    # Keep older configuration keys for backward compatibility; do not delete or
-    # overwrite stored package settings without an approved migration.
+    settings.pop("daily_reward", None); settings.pop("luck_max", None)
+    settings.pop("referral_reward", None); settings.pop("shop_packages", None)
     settings.setdefault("referral_reward_toman", 5000)
+    settings["subscription_packages"] = [[30, 40000], [60, 80000], [90, 120000]]
     for key, value in DEFAULT_DATA["bot_settings"].items(): settings.setdefault(key, clone(value))
     return settings
+
+def start_welcome_text(user):
+    """Persian /start greeting with a clickable Telegram user mention."""
+    raw_name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x).strip() or "دوست عزیز"
+    mention = f'<a href="tg://user?id={int(user.id)}">{esc(raw_name)}</a>'
+    default_text = (
+        f"〽️ سلام {mention} 🌹\n\n"
+        "💬 من یه ربات مدیریت گروهِ کامل و پرسرعت هستم که با من میتونی به راحتی گروهت رو مدیریت بکنی !\n\n"
+        "💥 تمایز های من نسبت به بقیه :\n\n"
+        "🧠 دارای سیستم AI هوش مصنوعی\n"
+        "🕵️ دارای سیستم TIG ضد ممبر دزد\n"
+        "🔪 دارای سیستم ABM ضد خیانت\n"
+        "💵 دارای سیستم درآمد از گروه\n"
+        "🔞 شناسایی رسانه +18 و مستهجن\n\n"
+        "🔥 پرسرعت در گروه 200 هزار نفره.\n\n"
+        "✅ بی همتا در سرعت.\n"
+        "✅ بی همتا در امکانات.\n"
+        "✅ بدون آفلاینی 99.9 درصد.\n"
+        "✅ بدون هیچگونه تبلیغاتی.\n"
+        "✅ دارای سرور اختصاصی.\n"
+        "✅ دارای سامانه تشخیص تبچی.\n"
+        "✅ دارای انواع قفل ها.\n"
+        "✅ دارای قابلیت اد اجباری.\n"
+        "✅ دارای قابلیت کانال اجباری.\n"
+        "✅ دارای خوش آمدگویی هوشمند.\n"
+        "✅ دارای مهلت بالای تست.\n"
+        "✅ ارائه آمار های روزانه و ماهانه کاربران.\n"
+        "✅ بیش از 7 سال سابقه.\n\n"
+        "🔰 حفاظت دربرابر فیلتر شدن گروه.\n\n"
+        "💎 ایجاد امنیت ، تخصص ماست.\n\n"
+        "❤️ تجربه لذت مدیریت گروه به سبک نوین.\n\n"
+        "🖥 برنامه نویسی شده توسط تیم ایسِت.\n\n"
+        "⚜️ بهترینی ، وقتی بهترین ها انتخابت کنند.\n\n"
+        "【 Licenced By 🅴🆂🅴🆃 】"
+    )
+    custom = str(bot_settings().get("public_features", "") or "").strip()
+    if custom:
+        marker = "__MASIH_CLICKABLE_USER_MENTION__"
+        safe_custom = esc(custom.replace("{name}", marker)).replace(marker, mention)
+        return safe_custom
+    return default_text
+
+
+
+
+def group_start_guide(chat_title="گروه"):
+    return (
+        f"🛡️ <b>راهنمای MASIH GUARD S1000+ برای {esc(chat_title or 'گروه')}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "👋 سلام! برای مدیریت گروه، ربات باید مدیر گروه باشد و مجوزهای لازم را داشته باشد.\n\n"
+        "🔐 تنظیمات پنل و مدیریت مالک در گفت‌وگوی خصوصی ربات انجام می‌شود؛ پیام‌های پنل در گروه منتشر نمی‌شوند.\n"
+        "🧰 مدیران گروه می‌توانند از فرمان‌های فارسی پشتیبانی‌شده استفاده کنند؛ برای اقدام روی یک عضو، روی پیام همان عضو ریپلای کنید.\n"
+        "📜 برای دیدن قوانین بنویسید «قوانین»، برای آمار «آمار»، و برای راهنمای فرمان‌ها «راهنما».\n"
+        "⚠️ بعضی امکانات فقط با مجوز فعال گروه و دسترسی ادمین ربات کار می‌کنند."
+    )
+
 
 def public_features_text():
     custom = str(bot_settings().get("public_features", "") or "").strip()
@@ -213,7 +270,7 @@ def is_group_admin(chat_id, user_id):
 SECTIONS = {
     "security":"🛡 امنیت گروه", "members":"👥 مدیریت اعضا", "settings":"⚙️ تنظیمات گروه",
     "welcome":"👋 خوشامد و خداحافظی", "rules":"📜 قوانین و پاسخ خودکار",
-    "referrals":"💰 کیف پول",
+    "referrals":"👥 کیف پول تومانی و اشتراک",
     "stats":"📊 آمار و گزارش", "customers":"💼 مشتریان و اشتراک",
     "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی",
     "backup":"💾 پشتیبان‌گیری", "daily":"📅 گزارش روزانه",
@@ -231,7 +288,7 @@ PUBLIC_FEATURES = (
     "├ اخطار، سکوت، رفع سکوت\n├ مسدودسازی، آزادسازی و اخراج\n"
     "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n├ سنجاق پیام و پاک‌سازی پیام‌ها با فرمان مدیر\n\n"
     "⚙️ <b>ابزارهای کاربردی</b>\n"
-    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۱۰۰ مدل فونت در گفت‌وگوی خصوصی\n"
+    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۱۰۰ سبک فونت در گفت‌وگوی خصوصی\n"
     "├ دریافت پروکسی‌های ذخیره‌شده\n├ هوش مصنوعی و تیکت پشتیبانی\n"
     "├ بازی، امتیاز و گزارش فعالیت\n\n"
     "💳 <b>کیف پول تومانی و اشتراک</b>\n"
@@ -242,12 +299,16 @@ PUBLIC_FEATURES = (
 )
 
 def public_keyboard():
-    # Keep the landing page compact; all wallet actions live behind one wallet entry.
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("💰 کیف پول", callback_data="user:wallet"))
-    kb.row(types.InlineKeyboardButton("🛒 خرید اشتراک", callback_data="user:shop"),
-           types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"))
-    kb.row(types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
+    kb.row(types.InlineKeyboardButton("💳 کیف پول تومانی", callback_data="user:wallet"),
+           types.InlineKeyboardButton("🛒 خرید اشتراک", callback_data="user:shop"))
+    kb.row(types.InlineKeyboardButton("👥 زیرمجموعه‌گیری", callback_data="user:referrals"),
+           types.InlineKeyboardButton("🧾 تراکنش‌ها", callback_data="user:transactions"))
+    kb.row(types.InlineKeyboardButton("💸 درخواست برداشت از کیف پول", callback_data="user:payout"))
+    kb.row(types.InlineKeyboardButton("🔤 تبدیل فونت", callback_data="user:font"),
+           types.InlineKeyboardButton("🌐 پروکسی‌ها", callback_data="user:proxies"))
+    kb.row(types.InlineKeyboardButton("🎫 پشتیبانی", callback_data="user:ticket"),
+           types.InlineKeyboardButton("🧠 هوش مصنوعی", callback_data="user:ai"))
     kb.row(types.InlineKeyboardButton("👨‍💻 پیام به سازنده", url=OWNER_CONTACT_URL),
            types.InlineKeyboardButton("🌐 وب‌سایت", url=configured_url("website_url", WEBSITE_URL)))
     return kb
@@ -277,10 +338,12 @@ def section_keyboard(section):
       "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
       "settings":[("⚙️ تنظیم سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules")],
       "referrals":[("💳 آمار کیف پول تومانی","show:wallet_stats"),("👥 آمار دعوت‌ها","show:referral_stats"),("🛒 درخواست‌های اشتراک","show:subscription_requests"),("💸 درخواست‌های برداشت","show:payout_requests"),("➕ تنظیم موجودی کیف پول","ask:wallet_adjust"),("📦 بسته‌های اشتراک","show:shop")],
+      "proxy":[("➕ افزودن پروکسی","ask:add_proxy"),("📋 نمایش پروکسی‌ها","show:proxies"),("🗑 حذف پروکسی","ask:delete_proxy")],
       "stats":[("📊 آمار ربات","show:stats"),("🧾 گزارش فعالیت","show:logs"),("📈 آمار یک گروه","ask:group_stats"),("📅 گزارش روزانه","show:daily"),("📅 گزارش هفتگی","show:weekly_report"),("🛡 وضعیت امنیت","show:security_status"),("💳 فروش و تمدید اشتراک","show:subscription_sales"),("🔎 جست‌وجوی گزارش‌ها","ask:search_logs")],
       "customers":[("➕ افزودن مشتری","ask:add_customer"),("📋 فهرست مشتریان","show:customers"),("🔎 جست‌وجوی مشتری","ask:find_customer")],
       "tickets":[("🎫 ثبت تیکت","ask:ticket"),("📋 تیکت‌ها","show:tickets")],
       "ai":[("🧠 پرسش از هوش مصنوعی","ask:ai")],
+      "games":[("🎮 بازی حدس عدد","game:guess"),("🏆 امتیاز من","show:points")],
       "backup":[("💾 دریافت نسخه پشتیبان","show:backup")],
       "daily":[("📅 گزارش روزانه","show:daily")],
       "smart":[("🧩 روشن/خاموش امنیت هوشمند","toggle:smart_security")],
@@ -302,8 +365,8 @@ def section_keyboard(section):
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
     # The menu can be viewed by anyone in private chat; every privileged callback is owner-gated.
-    if user_id is not None and int(chat_id) != int(user_id) and not is_owner(user_id):
-        try: bot.send_message(user_id, "🔐 دسترسی به پنل مدیریت فقط برای مالک ربات مجاز است.")
+    if user_id is not None and int(chat_id) != int(user_id):
+        try: bot.send_message(user_id, "🔐 این پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.")
         except Exception: pass
         return
     if user_id is not None: PANEL_CURRENT[user_id] = section
@@ -369,29 +432,69 @@ FONT_WRAPPERS = [
  ("♡ قلب توخالی", "♡ {} ♡"), ("ღ قلبی ۲", "ღ {} ღ"), ("ツ ژاپنی", "ツ {} ツ"), ("メ ژاپنی ۲", "メ {} メ"),
  ("〆 ژاپنی ۳", "〆 {} 〆"), ("彡 سایه‌ای", "彡 {} 彡"), ("乂 ضربدری", "乂 {} 乂"), ("× ضربدری ۲", "× {} ×"),
  ("➳ پیکانی", "➳ {} ➳"), ("➤ پیکانی ۲", "➤ {} ➤"), ("☯ نمادین", "☯ {} ☯"), ("☾ ماه", "☾ {} ☽"),
- ("༄ تزئینی", "༄ {} ༄"), ("𓆩 قاب ۱", "𓆩 {} 𓆪"), ("⫷ قاب ۲", "⫷ {} ⫸"), ("༒ تاریک", "༒ {} ༒"),
- ("➶ پروازی", "➶ {} ➷"), ("✧ درخشش", "✧･ﾟ {} ﾟ･✧"), ("❖ الماسی", "❖ {} ❖"), ("☘ طبیعت", "☘ {} ☘"),
- ("⚜ کلاسیک", "⚜ {} ⚜"), ("♕ تاج", "♕ {} ♕"), ("♛ تاج تیره", "♛『{}』♛"), ("𖤐 ستاره تاریک", "𖤐 {} 𖤐"),
- ("𓂀 چشم", "𓂀 {} 𓂀"), ("⟦ قاب ضخیم", "⟦ {} ⟧"), ("⟪ قاب دوتایی", "⟪ {} ⟫"), ("〔 قاب نرم", "〔 {} 〕"),
- ("〘 قاب تزئینی", "〘 {} 〙"), ("⌁ موج", "⌁ {} ⌁"), ("≈ موجی", "≈ {} ≈"), ("⊹ ستاره ریز", "⊹ {} ⊹"),
- ("✿ گل", "✿ {} ✿"), ("❀ گل ۲", "❀ {} ❀"), ("❁ گل ۳", "❁ {} ❁"), ("ꕤ گل ۴", "ꕤ {} ꕤ"),
- ("𑁍 گل ۵", "𑁍 {} 𑁍"), ("୨୧ روبان", "୨୧ {} ୨୧"), ("୭ روبان ۲", "୭ {} ୭"), ("ღ تزئینی", "ღ• {} •ღ"),
- ("⛧ گوتیک", "⛧ {} ⛧"), ("† صلیبی", "† {} †"), ("‡ صلیبی ۲", "‡ {} ‡"), ("⛥ نماد ۲", "⛥ {} ⛥"),
- ("⟡ منشوری", "⟡ {} ⟡"), ("◈ لوزی", "◈ {} ◈"), ("◇ لوزی توخالی", "◇ {} ◇"), ("◆ لوزی پر", "◆ {} ◆"),
- ("◉ دایره", "◉ {} ◉"), ("◎ دایره ۲", "◎ {} ◎"), ("◌ دایره ۳", "◌ {} ◌"), ("● نقطه پر", "● {} ●"),
- ("◍ نقطه ۲", "◍ {} ◍"), ("◐ نیم‌دایره", "◐ {} ◑"), ("◜ گوشه‌ای", "◜ {} ◝"), ("◞ گوشه‌ای ۲", "◞ {} ◟"),
- ("╰ قاب پایین", "╰ {} ╯"), ("╭ قاب بالا", "╭ {} ╮"), ("┊ خطی", "┊ {} ┊"), ("║ دوخطی", "║ {} ║"),
- ("═ خط افقی", "═ {} ═"), ("╳ ضربدر", "╳ {} ╳"), ("※ نشانه", "※ {} ※"), ("⁂ گل‌ستاره", "⁂ {} ⁂"),
- ("༺༻ قاب سلطنتی", "༺═ {} ═༻"), ("꧁༺ قاب فانتزی", "꧁༺ {} ༻꧂"), ("★ ستاره توپر", "★彡 {} 彡★"), ("☆ ستاره توخالی", "☆ﾟ.* {} *.ﾟ☆"),
- ("☁ ابری", "☁ {} ☁"), ("☄ دنباله‌دار", "☄ {} ☄"), ("☼ خورشید", "☼ {} ☼"), ("☽ ماه ۲", "☽ {} ☾"),
- ("♬ موسیقی", "♬ {} ♬"), ("♪ موسیقی ۲", "♪ {} ♪"), ("❣ قلب ۳", "❣ {} ❣"), ("♥ قلب ۴", "♥ {} ♥"),
- ("ღ قلب ۵", "ღღ {} ღღ"), ("✪ ستاره ۳", "✪ {} ✪"), ("✰ ستاره ۴", "✰ {} ✰"), ("✵ ستاره ۵", "✵ {} ✵")
+ ("༄ تزئینی", "༄ {} ༄"), ("𓆩 قاب ۱", "𓆩 {} 𓆪"), ("⫷ قاب ۲", "⫷ {} ⫸"), ("༒ تاریک", "༒ {} ༒")
 ]
+
+
+EXTRA_FONT_WRAPPERS = [
+    ("نئونی", "✧ {} ✧"),
+    ("الماسی", "◇ {} ◇"),
+    ("شاهانه", "♛ {} ♛"),
+    ("ستارهٔ دنباله‌دار", "☄ {} ☄"),
+    ("خورشیدی", "☀ {} ☀"),
+    ("ماه‌تاب", "☾ {} ☽"),
+    ("برگی", "❧ {} ❧"),
+    ("گل‌دار", "❀ {} ❀"),
+    ("گل رز", "🌹 {} 🌹"),
+    ("شعله", "♨ {} ♨"),
+    ("موجی", "≈ {} ≈"),
+    ("کریستالی", "◈ {} ◈"),
+    ("هندسی", "◆ {} ◆"),
+    ("کمانی", "⌁ {} ⌁"),
+    ("خطی", "═ {} ═"),
+    ("دوخطی", "╬ {} ╬"),
+    ("کلاسیک", "❖ {} ❖"),
+    ("نقش‌دار", "۞ {} ۞"),
+    ("ستارهٔ هشت‌پر", "✵ {} ✵"),
+    ("ستارهٔ چهارپر", "✣ {} ✣"),
+    ("قاب پررنگ", "【 {} 】"),
+    ("قاب زاویه‌ای", "⟪ {} ⟫"),
+    ("قاب دوبل", "《 {} 》"),
+    ("قاب مثلثی", "⟬ {} ⟭"),
+    ("قاب موج", "≋ {} ≋"),
+    ("خط‌چین", "┄ {} ┄"),
+    ("خط‌بلند", "━━ {} ━━"),
+    ("کادر گوشه‌دار", "┏ {} ┓"),
+    ("کادر پایین", "┗ {} ┛"),
+    ("شطرنجی", "▣ {} ▣"),
+    ("چهارگوش", "▪ {} ▪"),
+    ("لوزی", "♦ {} ♦"),
+    ("دایرهٔ توپر", "● {} ●"),
+    ("دایرهٔ توخالی", "○ {} ○"),
+    ("مثلثی", "▲ {} ▲"),
+    ("پیکان‌دار", "➳ {} ➳"),
+    ("بال‌دار", "༺ {} ༻"),
+    ("افسانه‌ای", "𓆩 {} 𓆪"),
+    ("تاریک ۲", "☠ {} ☠"),
+    ("جادویی", "⋆｡ {} ｡⋆"),
+    ("قلب قرمز", "❤️ {} ❤️"),
+    ("قلب آبی", "💙 {} 💙"),
+    ("قلب سبز", "💚 {} 💚"),
+    ("قلب زرد", "💛 {} 💛"),
+    ("قلب بنفش", "💜 {} 💜"),
+    ("درخشش", "💫 {} 💫"),
+    ("ستاره رنگی", "🌟 {} 🌟"),
+    ("تاج و تخت", "♕ {} ♕"),
+    ("شمشیر", "⚔ {} ⚔"),
+    ("شیر و خورشید", "🦁 {} 🦁"),
+]
+
+
 def font_variants(text):
     variants=[]
     has_persian = bool(re.search(r"[\u0600-\u06ff]", text))
-    # Persian/Arabic letters lack broadly supported Unicode mathematical alphabets;
-    # the decorative styles preserve the original letters instead of claiming a false conversion.
+    # Persian/Arabic letters have no broadly supported Unicode mathematical font alphabets.
+    # For Persian words, the first 18 styles therefore add distinct frames while Latin is mapped.
     for i, mapping in enumerate(FONT_MAPS):
         name = FONT_NAMES[i] if i < len(FONT_NAMES) else f"سبک {i+1}"
         converted = text.translate(mapping)
@@ -402,35 +505,10 @@ def font_variants(text):
         variants.append((name, converted))
     for name, wrapper in FONT_WRAPPERS:
         variants.append((name, wrapper.format(text)))
-    # Return 100 distinct numbered styles (Unicode mappings plus decorative variants).
-    unique=[]; seen=set()
-    for name, value in variants:
-        if value not in seen:
-            seen.add(value); unique.append((name, value))
-        if len(unique) >= 100: break
-    # If duplicate input styles reduce the count, make remaining decorative variants unique.
-    for i, (name, wrapper) in enumerate(FONT_WRAPPERS):
-        if len(unique) >= 100: break
-        value=wrapper.format(text) + (" " * (i+1))
-        if value not in seen:
-            seen.add(value); unique.append((name, value))
-    return unique[:100]
-
-def send_font_results(message, raw):
-    raw=(raw or "").strip()
-    if not raw:
-        bot.reply_to(message, "🔤 بعد از کلمهٔ «فونت»، متن دلخواهت را هم بنویس؛ مثلاً: فونت مسیح")
-        return
-    if len(raw)>120:
-        bot.reply_to(message, "برای نمایش ۱۰۰ مدل فونت، متن حداکثر ۱۲۰ نویسه باشد.")
-        return
-    variants=font_variants(raw)
-    for start in range(0, len(variants), 10):
-        lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10], start=start+1)]
-        heading=("🔤 <b>۱۰۰ مدل فونت برای متن تو</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,len(variants))})</b>\n━━━━━━━━━━━━━━\n")
-        kwargs={"parse_mode":"HTML"}
-        if start==0: kwargs["reply_to_message_id"]=message.message_id
-        bot.send_message(message.chat.id, heading+"\n\n".join(lines), **kwargs)
+    for name, wrapper in EXTRA_FONT_WRAPPERS:
+        variants.append((name, wrapper.format(text)))
+    # Exactly 100 outputs: Unicode Latin mappings plus decorative wrappers for Persian.
+    return variants[:100]
 def convert_font(text, style=0):
     variants = font_variants(text)
     return variants[style % len(variants)][1]
@@ -482,23 +560,6 @@ def subscription_support_keyboard():
     kb.add(types.InlineKeyboardButton("🛒 برگشت به بسته‌های اشتراک", callback_data="user:shop"))
     return kb
 
-def deposit_text(uid):
-    """Show owner-configured payment details and wait for a receipt privately."""
-    if not CARD_NUMBER:
-        WAITING.pop(uid, None)
-        return ("💳 <b>افزایش موجودی کیف پول</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-                "شماره کارت هنوز در تنظیمات هاست وارد نشده است. برای دریافت اطلاعات پرداخت، به سازنده پیام بده: ") + f"<a href=\"{esc(OWNER_CONTACT_URL)}\">@Ma3ih01</a>\n\n" + \
-               "بعد از واریز، تصویر رسید را همین‌جا در گفت‌وگوی خصوصی ربات بفرست."
-    WAITING[uid] = {"action": "deposit_receipt", "chat_id": uid, "created": now_text()}
-    holder = f"\n👤 صاحب کارت: <b>{esc(CARD_HOLDER)}</b>" if CARD_HOLDER else ""
-    return ("💳 <b>افزایش موجودی کیف پول</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"💳 شماره کارت: <code>{esc(CARD_NUMBER)}</code>{holder}\n\n"
-            "۱) مبلغ موردنظرت را به کارت بالا واریز کن.\n"
-            "۲) پس از واریز، تصویر رسید را همین‌جا در گفت‌وگوی خصوصی ربات بفرست.\n"
-            "۳) ربات رسید را همراه شناسه عددی و نام کاربری تو برای مالک می‌فرستد.\n"
-            "۴) پس از بررسی رسید توسط مالک، موجودی به‌صورت دستی شارژ می‌شود.\n\n"
-            "⚠️ تا پیش از تأیید مالک، موجودی تغییر نمی‌کند. رمز کارت، رمز پویا یا اطلاعات ورود بانکی را نفرست.")
-
 def shop_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
     labels = {30: "🥉 اشتراک ۱ ماهه — 40,000 تومان", 60: "🥈 اشتراک ۲ ماهه — 80,000 تومان", 90: "🥇 اشتراک ۳ ماهه — 120,000 تومان"}
@@ -511,20 +572,25 @@ def shop_keyboard():
 def shop_text(uid):
     sub = DATA.setdefault("subscriptions", {}).get(str(uid), {})
     expiry = sub.get("expires", "اشتراک فعال نیست")
-    package_text = "\n".join(f"⭐ {days} روز: {price:,} تومان" for days, price in SUBSCRIPTION_PACKAGES)
-    return ("🌈 <b>خرید اشتراک MASIH GUARD S1000+</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "✨ <b>بسته‌های اشتراک</b>\n"
-            f"{package_text}\n\n"
-            f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>\n"
-            f"📅 پایان اشتراک فعلی: <b>{esc(expiry)}</b>\n\n"
-            "🧾 <b>روش خرید و فعال‌سازی</b>\n"
-            "۱) بستهٔ موردنظرت را انتخاب کن تا درخواست خرید ثبت شود.\n"
-            "۲) برای دریافت شماره کارت و اطلاعات دقیق پرداخت، از دکمهٔ «پیام به سازنده» در همین بخش به پیوی سازنده پیام بده.\n"
-            "۳) مبلغ دقیق همان بسته را انتقال بده و رسید یا شمارهٔ پیگیری را فقط برای سازنده بفرست.\n"
-            "۴) اشتراک پس از بررسی و تأیید پرداخت توسط مالک فعال می‌شود؛ ثبت درخواست به‌تنهایی به معنی پرداخت یا فعال‌شدن اشتراک نیست.\n\n"
-            "🔒 برای امنیت، رمز کارت، رمز پویا یا اطلاعات ورود بانکی را برای هیچ‌کس ارسال نکن.\n"
-            "👨‍💻 برای هماهنگی پرداخت فقط از دکمهٔ پیام به سازنده استفاده کن.")
+    package_text = "\\n".join(f"⭐ {days} روز: {price:,} تومان" for days, price in SUBSCRIPTION_PACKAGES)
+    if CARD_NUMBER and CARD_HOLDER:
+        payment_text = f"۲) شماره کارت: <code>{esc(CARD_NUMBER)}</code>\\n👤 به نام: <b>{esc(CARD_HOLDER)}</b>\\n"
+    else:
+        payment_text = "۲) اطلاعات کارت هنوز در تنظیمات هاست ثبت نشده؛ از دکمهٔ «پیام به سازنده» اطلاعات معتبر را بگیر.\\n"
+    return ("🌈 <b>خرید اشتراک MASIH GUARD S1000+</b>\\n"
+            "━━━━━━━━━━━━━━━━━━━━\\n"
+            "✨ <b>بسته‌های اشتراک</b>\\n"
+            f"{package_text}\\n\\n"
+            f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>\\n"
+            f"📅 پایان اشتراک فعلی: <b>{esc(expiry)}</b>\\n\\n"
+            "🧾 <b>روش خرید و فعال‌سازی</b>\\n"
+            "۱) بستهٔ موردنظرت را انتخاب کن تا درخواست خرید ثبت شود.\\n"
+            + payment_text
+            + "۳) مبلغ دقیق همان بسته را انتقال بده و پس از ثبت درخواست، از دکمهٔ «ارسال رسید پرداخت» عکس رسید را برای ربات بفرست.\\n"
+            "۴) مالک رسید را دستی بررسی می‌کند؛ اشتراک فقط پس از تأیید مالک فعال می‌شود.\\n\\n"
+            "🔒 رمز کارت، رمز پویا یا اطلاعات ورود بانکی را برای هیچ‌کس ارسال نکن.\\n"
+            "👨‍💻 اگر اطلاعات کارت نمایش داده نشد، از دکمهٔ پیام به سازنده استفاده کن.")
+
 
 def public_wallet(uid):
     ensure_user(uid)
@@ -730,22 +796,10 @@ def process_group_security(message):
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
     elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
-    elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])):
-        reason="استفاده از کلمه ممنوع"
-        try:
-            bot.send_message(OWNER_ID,
-                "🚨 <b>هشدار کلمه ممنوع در گروه</b>\n"
-                f"گروه: <code>{chat.id}</code>\nکاربر: <code>{user.id}</code>\n"
-                f"پیام: {esc(text[:500])}")
-        except Exception as alert_error:
-            print("Sensitive-word alert error:", repr(alert_error))
+    elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
     if not reason and text and s.get("anti_repeat") and normalize_security_text(prev.get("normalized", prev.get("text", ""))) == normalize_security_text(text) and normalize_security_text(text) and now-prev.get("time",0)<30: reason="پیام تکراری یا با تغییرات جزئی"
-    try: flood_window = max(2, min(60, int(s.get("flood_window_seconds", 8))))
-    except (TypeError, ValueError): flood_window = 8
-    try: flood_threshold = max(3, min(30, int(s.get("flood_threshold", 7))))
-    except (TypeError, ValueError): flood_threshold = 7
-    times=[t for t in prev.get("times",[]) if now-t<flood_window]; times.append(now)
-    if not reason and s.get("anti_spam") and len(times)>=flood_threshold: reason="ارسال پیام‌های پرتعداد"
+    times=[t for t in prev.get("times",[]) if now-t<8]; times.append(now)
+    if not reason and s.get("anti_spam") and len(times)>=7: reason="ارسال پیام‌های پرتعداد"
     DATA["seen"][key]={"text":text,"normalized":normalize_security_text(text),"time":now,"times":[] if reason=="ارسال پیام‌های پرتعداد" else times}
     if reason:
         if safe_delete(message):
@@ -774,7 +828,6 @@ _GROUP_ALIASES = {
     "delete": "delete", "حذف": "delete", "پاک‌کن": "delete", "پاککن": "delete",
     "clean": "clean", "پاکسازی": "clean", "پاک سازی": "clean", "پاکسازی پیام": "clean", "پاکسازیپیام": "clean",
     "report": "report", "گزارش": "report", "گزارش‌تخلف": "report",
-    "ai": "ai", "ask": "ai", "هوش": "ai",
     "قفل لینک": "set_anti_link_on", "ضدلینک روشن": "set_anti_link_on", "بازکردن لینک": "set_anti_link_off", "ضدلینک خاموش": "set_anti_link_off",
     "قفل تبلیغ": "set_anti_ads_on", "ضدتبلیغ روشن": "set_anti_ads_on", "بازکردن تبلیغ": "set_anti_ads_off", "ضدتبلیغ خاموش": "set_anti_ads_off",
     "ضد اسپم روشن": "set_anti_spam_on", "ضد اسپم خاموش": "set_anti_spam_off", "ضدتکرار روشن": "set_anti_repeat_on", "ضدتکرار خاموش": "set_anti_repeat_off",
@@ -800,6 +853,9 @@ def _normalize_group_command(text):
         value = value.split("@", 1)[0]
     return value
 
+_GROUP_ALIASES_NORMALIZED = {_normalize_group_command(key): value for key, value in _GROUP_ALIASES.items()}
+
+
 def _reply_target(message):
     replied = getattr(message, "reply_to_message", None)
     return getattr(getattr(replied, "from_user", None), "id", None) if replied else None
@@ -814,7 +870,7 @@ def _handle_group_shortcut(message, text):
     # Longest phrase first supports commands such as «مسدود کن» and «رفع سکوت».
     for n in range(min(3, len(words)), 0, -1):
         candidate = " ".join(words[:n])
-        command = _GROUP_ALIASES.get(_normalize_group_command(candidate))
+        command = _GROUP_ALIASES_NORMALIZED.get(_normalize_group_command(candidate))
         if command:
             used_words = n
             break
@@ -862,6 +918,9 @@ def _handle_group_shortcut(message, text):
         allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "welcome_on", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"}
         if setting not in allowed_settings:
             bot.reply_to(message, "⚠️ این تنظیم شناخته نشد.")
+            return True
+        if not user or not is_group_admin(chat_id, uid):
+            bot.reply_to(message, "⛔ فقط مدیران گروه می‌توانند تنظیمات امنیتی را تغییر دهند.")
             return True
         get_group_settings(chat_id)[setting] = enabled
         save_data()
@@ -934,170 +993,81 @@ def _handle_group_shortcut(message, text):
         bot.reply_to(message, "⚠️ انجام دستور ناموفق بود؛ دسترسی ادمین ربات و مجوزهای گروه را بررسی کن.")
     return True
 
-GAME_EMOJIS = {
-    "بسکتبال": "🏀", "فوتبال": "⚽", "بولینگ": "🎳",
-    "دارت": "🎯", "تاس": "🎲", "اسلات": "🎰"
-}
-
-def game_menu_text():
-    return ("🎮 <b>بازی‌های MASIH GUARD</b>\n━━━━━━━━━━━━━━\n"
-            "برای اجرای هر بازی، عبارت نمونه را بفرست:\n"
-            "🏀 بازی بسکتبال\n⚽ بازی فوتبال\n🎳 بازی بولینگ\n"
-            "🎯 بازی دارت\n🎲 بازی تاس\n🎰 بازی اسلات\n\n"
-            "امتیاز هر بازی پس از دریافت نتیجه ذخیره می‌شود؛ در بازی اسلات امتیاز بر اساس نتیجهٔ تلگرام محاسبه می‌شود.")
-
-def play_telegram_game(message, game_name):
-    emoji = GAME_EMOJIS.get(game_name)
-    if not emoji:
-        bot.reply_to(message, game_menu_text(), parse_mode="HTML")
-        return
-    try:
-        result = bot.send_dice(message.chat.id, emoji=emoji, reply_to_message_id=message.message_id)
-        value = int(getattr(getattr(result, "dice", None), "value", 0) or 0)
-        uid = int(message.from_user.id)
-        # Keep scoring simple and persistent; slots award more for a high-value outcome.
-        points = (10 if value == 64 else value) if game_name == "اسلات" else value
-        DATA.setdefault("points", {})[str(uid)] = int(DATA.setdefault("points", {}).get(str(uid), 0)) + points
-        DATA.setdefault("game_results", {}).setdefault(str(uid), []).append({"game": game_name, "value": value, "points": points, "time": now_text()})
-        DATA["game_results"][str(uid)] = DATA["game_results"][str(uid)][-100:]
-        save_data()
-        bot.send_message(message.chat.id, f"🎮 نتیجهٔ {game_name}: {value}\n⭐ امتیاز این دور: {points}\n🏆 مجموع امتیاز ذخیره‌شده: {DATA['points'][str(uid)]}", reply_to_message_id=message.message_id)
-    except Exception as e:
-        print("Game error:", repr(e))
-        bot.reply_to(message, "⚠️ اجرای بازی ممکن نشد؛ نسخهٔ تلگرام یا دسترسی ربات را بررسی کن.")
-
-def activate_current_group_from_phrase(message, days):
-    """Activate/extend the current group; the chat is inferred from the message itself."""
-    if not is_owner(message.from_user.id if message.from_user else 0):
-        bot.reply_to(message, "⛔ فعال‌سازی اشتراک گروه فقط برای مالک اصلی مجاز است.")
-        return True
-    chat = message.chat
-    if chat.type not in ("group", "supergroup"):
+@bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
+def handle_ai_group_management(message, text):
+    """Execute a small, explicit set of safe group-setting requests from AI replies."""
+    normalized = (text or "").casefold().replace("ي", "ی").replace("ك", "ک")
+    normalized = re.sub(r"[\u200c\s]+", "", normalized)
+    patterns = [
+        (("قفللینک", "ضدلینک"), "anti_link"),
+        (("قفلتبلیغ", "ضدتبلیغ"), "anti_ads"),
+        (("ضداسپم", "قفلاسپم"), "anti_spam"),
+        (("ضدتکرار", "قفلپیامتکراری"), "anti_repeat"),
+        (("قفلرسانه", "قفرسانه"), "media_lock"),
+        (("خوشامدگویی", "خوشامد"), "welcome_on"),
+        (("خداحافظی",), "farewell_on"),
+    ]
+    target_setting = None
+    for phrases, setting in patterns:
+        if any(phrase in normalized for phrase in phrases):
+            target_setting = setting
+            break
+    if not target_setting:
         return False
-    try:
-        me = bot.get_me()
-        member = bot.get_chat_member(chat.id, me.id)
-        if getattr(member, "status", "") not in ("administrator", "creator"):
-            bot.reply_to(message, "⚠️ برای فعال‌سازی کامل، ربات باید در این گروه مدیر باشد و مجوزهای لازم را داشته باشد.")
+    off_words = ("خاموش", "غیرفعال", "بازکن", "بردار", "غیرفعالشکن", "خاموششکن")
+    on_words = ("روشن", "فعال", "ببند", "قفلکن", "فعال‌شکن")
+    is_off = any(word in normalized for word in off_words)
+    is_on = any(word in normalized for word in on_words)
+    if not is_off and not is_on:
+        bot.reply_to(message, "می‌خوای این تنظیم روشن بشه یا خاموش؟ لطفاً «روشن کن» یا «خاموش کن» رو مشخص کن.")
+        return True
+    user_id = getattr(getattr(message, "from_user", None), "id", 0)
+    chat_id = message.chat.id
+    if not is_group_admin(chat_id, user_id):
+        bot.reply_to(message, "⛔ برای تغییر تنظیمات امنیتی باید مدیر همین گروه باشی.")
+        return True
+    enabled = bool(is_on and not is_off)
+    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock"}:
+        try:
+            me = bot.get_me()
+            member = bot.get_chat_member(chat_id, me.id)
+            member_status = getattr(member, "status", "")
+            if member_status not in ("administrator", "creator") or (member_status != "creator" and not getattr(member, "can_delete_messages", False)):
+                bot.reply_to(message, "⚠️ برای فعال‌کردن این فیلتر، ربات باید مدیر گروه با مجوز حذف پیام باشد.")
+                return True
+        except Exception:
+            bot.reply_to(message, "⚠️ نتونستم مجوزهای ربات رو بررسی کنم؛ فعلاً تنظیم رو تغییر ندادم.")
             return True
-        from datetime import timedelta
-        licenses = DATA.setdefault("group_licenses", {})
-        old = licenses.get(str(chat.id), {})
-        now = datetime.now()
-        if days < 0:
-            bot.reply_to(message, "⚠️ مدت اعتبار نمی‌تواند منفی باشد.")
-            return True
-        if days == 0:
-            expires = ""  # صفر یعنی دائمی
-        else:
-            # If a valid timed license already exists, extend from its expiry; otherwise start now.
-            base = now
-            if old.get("approved") and old.get("expires"):
-                try:
-                    previous = datetime.strptime(old["expires"], "%Y-%m-%d %H:%M:%S")
-                    if previous > now:
-                        base = previous
-                except (TypeError, ValueError):
-                    pass
-            expires = (base + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        record = {"approved": True, "expires": expires, "activated_by": int(message.from_user.id),
-                  "updated": now_text(), "days": days, "title": getattr(chat, "title", ""),
-                  "started": now_text(), "activation_count": int(old.get("activation_count", 0)) + 1}
-        licenses[str(chat.id)] = record
-        DATA.setdefault("subscriptions", {})[str(chat.id)] = {
-            "days": days, "started": now_text(), "expires": expires, "status": "active",
-            "source": "group_phrase", "title": getattr(chat, "title", "")}
-        add_log("group_subscription_activated", chat.id, message.from_user.id, f"days={days}; expires={expires or 'permanent'}")
-        save_data()
-        length = "دائمی" if days == 0 else f"{days} روز"
-        end_text = "دائمی" if not expires else datetime.strptime(expires, "%Y-%m-%d %H:%M:%S").strftime("%Y/%m/%d ساعت %H:%M")
-        bot.reply_to(message,
-            "🌈 <b>MASIH GUARD S1000+ | فعال‌سازی موفق</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"✅ گروه «{esc(getattr(chat, 'title', 'گروه مشتری'))}» با موفقیت فعال شد.\n"
-            f"📅 مدت ثبت‌شده: <b>{length}</b>\n"
-            f"🕒 پایان اعتبار: <b>{end_text}</b>\n"
-            f"🧾 تاریخ ثبت: {now.strftime('%Y/%m/%d')} — ساعت {now.strftime('%H:%M:%S')}\n"
-            "👑 مدیریت و پشتیبانی: مسیح مختاری")
-    except Exception as e:
-        print("Group phrase activation error:", repr(e))
-        bot.reply_to(message, "⚠️ فعال‌سازی انجام نشد؛ حضور ربات و دسترسی‌های لازم را بررسی کن.")
+    get_group_settings(chat_id)[target_setting] = enabled
+    save_data()
+    add_log("ai_group_setting_changed", chat_id, user_id, f"{target_setting}={enabled}")
+    label = {
+        "anti_link": "ضدلینک", "anti_ads": "ضدتبلیغ", "anti_spam": "ضداسپم",
+        "anti_repeat": "ضدتکرار", "media_lock": "قفل رسانه",
+        "welcome_on": "خوشامدگویی", "farewell_on": "خداحافظی"
+    }.get(target_setting, target_setting)
+    bot.reply_to(message, f"✅ {label} {'روشن' if enabled else 'خاموش'} شد.")
     return True
 
 
-def parse_activation_phrase(text):
-    """Accept Persian/English digits and flexible duration wording for days, months, or years."""
-    value = (text or "").replace("ي", "ی").replace("ك", "ک").strip().casefold()
-    value = value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    value = value.replace("‌", " ")
-    value = re.sub(r"[!؟?،,:؛]+", " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if value in {"فعال سازی مسیح گارد دائمی", "فعال سازی اعتبار دائمی", "ثبت اشتراک دائمی", "فعال سازی مسیح گارد ۰ روزه"}:
-        return 0
-    # Examples: فعال سازی مسیح گارد 30 روزه / فعال سازی اعتبار به مدت 365 روز / ثبت اشتراک 1 ساله
-    if not any(k in value for k in ("فعال سازی", "فعال‌سازی", "ثبت اشتراک", "فعال سازی اعتبار", "فعال کردن اعتبار")):
-        return None
-    match = re.search(r"(?:به مدت\s*)?(\d{1,5})\s*(روز(?:ه)?|روز|ماه(?:ه)?|سال(?:ه)?|هفته(?:ای)?)", value)
-    if not match:
-        return None
-    amount = int(match.group(1))
-    unit = match.group(2)
-    if amount == 0:
-        return 0
-    if unit.startswith("روز"):
-        days = amount
-    elif unit.startswith("هفته"):
-        days = amount * 7
-    elif unit.startswith("ماه"):
-        days = amount * 30
-    else:
-        days = amount * 365
-    return days if 0 <= days <= 36500 else None
-
-@bot.message_handler(content_types=["text","photo","video","audio","voice","document","sticker","animation","video_note","contact","location"], func=lambda m: m.chat.type in ("group","supergroup"))
 def group_message_handler(message):
-    global BOT_USERNAME, BOT_ID
     try:
-        text=get_text(message)
-        # /start is a public entry point and should answer in groups too, even before group licensing.
-        if text and re.match(r"^/start(?:@\w+)?(?:\s|$)", text.strip(), flags=re.IGNORECASE):
-            global BOT_USERNAME
-            try:
-                if not BOT_USERNAME:
-                    BOT_USERNAME = (getattr(bot.get_me(), "username", "") or "").casefold()
-            except Exception:
-                pass
-            if BOT_USERNAME:
-                private_link = f"https://t.me/{BOT_USERNAME}?start=group"
-                kb = types.InlineKeyboardMarkup()
-                kb.add(types.InlineKeyboardButton("🤖 باز کردن ربات در خصوصی", url=private_link))
-                bot.reply_to(message, "سلام! 👋 MASIH GUARD فعاله. برای امکانات عمومی از همین‌جا استفاده کن؛ تنظیمات مدیریتی فقط با مجوز مربوط فعال می‌شوند.", reply_markup=kb)
+        text = get_text(message)
+        normalized_text = (text or "").strip().casefold().replace("ي", "ی").replace("ك", "ک")
+        first_token = normalized_text.split(maxsplit=1)[0] if normalized_text else ""
+        if first_token.split("@", 1)[0] == "/start":
+            bot.reply_to(message, group_start_guide(getattr(message.chat, "title", "گروه")))
+            return
+        if normalized_text == "پنل":
+            uid = getattr(getattr(message, "from_user", None), "id", 0)
+            if is_owner(uid):
+                try:
+                    bot.send_message(uid, "🔐 پنل خصوصی باز شد؛ تعاملات پنل در گروه ارسال نمی‌شوند.")
+                    send_panel(uid, user_id=uid)
+                except Exception:
+                    bot.reply_to(message, "برای بازکردن پنل، ابتدا گفت‌وگوی خصوصی ربات را باز کن و /start را بزن.")
             else:
-                bot.reply_to(message, "سلام! 👋 MASIH GUARD فعاله. امکانات گروه از همین‌جا در دسترس‌اند؛ تنظیمات مدیریتی نیازمند مجوز هستند.")
-            return
-        normalized_phrase = re.sub(r"[\u200c\s]+", " ", (text or "").replace("ي", "ی").replace("ك", "ک").strip()).casefold()
-        activation_days = parse_activation_phrase(normalized_phrase)
-        if activation_days is not None:
-            activate_current_group_from_phrase(message, activation_days)
-            return
-        # «پنل» را در همان گروه باز کن؛ برای کاربران غیرمالک، گزینه‌های تغییردهنده قفل هستند.
-        if normalized_phrase in {"پنل", "پنل میخوام", "پنل می خوام", "پنل می خواهم", "پنل مدیریت"}:
-            if is_owner(message.from_user.id if message.from_user else 0):
-                PANEL_HISTORY[message.from_user.id] = []
-                send_panel(message.chat.id, "home", user_id=message.from_user.id)
-            else:
-                kb = types.InlineKeyboardMarkup(row_width=1)
-                for label in ("🔒 امنیت گروه", "🔒 مدیریت اعضا", "🔒 تنظیمات گروه", "🔒 خوشامد و قوانین", "🔒 آمار و گزارش"):
-                    kb.add(types.InlineKeyboardButton(label, callback_data="locked:group_panel"))
-                kb.add(types.InlineKeyboardButton("📩 درخواست فعال‌سازی گروه", url=OWNER_CONTACT_URL))
-                bot.reply_to(message, "🌈 <b>پنل MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━━━━━\nبخش‌های مدیریتی برای این گروه قفل هستند. پس از فعال‌سازی اشتراک، دسترسی‌های مجاز باز می‌شوند.", reply_markup=kb)
-            return
-        if normalized_phrase == "بازی":
-            if is_group_licensed(message.chat.id): bot.reply_to(message, game_menu_text(), parse_mode="HTML")
-            return
-        game_match = re.fullmatch(r"بازی (بسکتبال|فوتبال|بولینگ|دارت|تاس|اسلات)", normalized_phrase)
-        if game_match:
-            if is_group_licensed(message.chat.id): play_telegram_game(message, game_match.group(1))
+                bot.reply_to(message, "⛔ فقط مالک ربات می‌تواند پنل مدیریت را باز کند.")
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -1109,27 +1079,8 @@ def group_message_handler(message):
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
             return
-        # Public font shortcut: any text after «فونت» is the text to stylize, not a style name.
-        normalized_font = text.replace("ي", "ی").replace("ك", "ک").strip() if text else ""
-        if normalized_font and normalized_font.casefold().startswith("فونت "):
-            send_font_results(message, normalized_font[5:].strip())
-            return
-        if normalized_font and normalized_font.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
-            bot.reply_to(message, "🔤 متن دلخواهت را به شکل «فونت متن‌دلخواه» بفرست تا ۱۰۰ مدل دریافت کنی.")
-            return
-        # Route AI replies and commands before generic handlers: this group catch-all is registered first.
-        if text and text.split()[0].split("@", 1)[0].casefold() in {"/ai", "/ask"}:
-            parts = text.split(maxsplit=1)
-            if len(parts) < 2:
-                bot.reply_to(message, "جانم، بگو ببینم؟")
-            else:
-                status = bot.reply_to(message, "🤖 در حال بررسی سؤال...")
-                answer = ask_ai(parts[1].strip())
-                try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
-                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
-            return
-        # «هوش» alone gets the short greeting; «هوش + question» asks AI.
-        # Replying to the bot with a question also invokes AI, without needing a keyword.
+        # AI in groups is activated only by replying to a message sent by this bot.
+        global BOT_USERNAME, BOT_ID
         try:
             if not BOT_ID or not BOT_USERNAME:
                 me = bot.get_me()
@@ -1142,24 +1093,13 @@ def group_message_handler(message):
         reply_to_bot = bool(replied and getattr(getattr(replied, "from_user", None), "is_bot", False)
                             and (getattr(getattr(replied, "from_user", None), "id", None) == bot_id
                                  or (BOT_USERNAME and (getattr(getattr(replied, "from_user", None), "username", "") or "").casefold() == BOT_USERNAME)))
-        if text and text.strip().casefold().replace("ي", "ی").replace("ك", "ک") == "هوش":
-            bot.reply_to(message, "جانم، بگو ببینم؟")
-            return
         if reply_to_bot and text and text.strip() and not text.strip().startswith("/"):
+            if handle_ai_group_management(message, text.strip()):
+                return
             status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
             answer = ask_ai(text.strip())
             try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
             except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
-            return
-        if text and text.strip().casefold().startswith("هوش "):
-            question = text.strip()[len("هوش "):].strip()
-            if not question:
-                bot.reply_to(message, "جانم، بگو ببینم؟")
-            else:
-                status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
-                answer = ask_ai(question)
-                try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
-                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
             return
         # Track group activity and bounded message history for selected statistics/cleanup features.
         track_group_activity(message.chat.id, getattr(message.from_user,"id",0), message.message_id)
@@ -1235,31 +1175,23 @@ def group_message_handler(message):
 def welcome_card(chat_id, member):
     try:
         count = bot.get_chat_member_count(chat_id)
-    except Exception:
-        count = "نامشخص"
+    except Exception: count = "نامشخص"
     stamp = datetime.now()
-    raw_name = getattr(member, "first_name", "") or "دوست عزیز"
+    raw_name = member.first_name or "دوست عزیز"
     name = f'<a href="tg://user?id={int(member.id)}">{esc(raw_name)}</a>'
-    username = ("@" + esc(member.username)) if getattr(member, "username", None) else "ثبت نشده"
-    try:
-        group_title = esc(bot.get_chat(chat_id).title or "محفل دوستان")
-    except Exception:
-        group_title = "محفل دوستان"
-    return (
-        "🌌✨ <b>به جمع خانوادهٔ MASIH GUARD خوش آمدی</b> ✨🌌\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏡 <b>نام گروه:</b> {group_title}\n"
-        f"💫 <b>دوست تازه‌وارد:</b> {name}\n"
-        f"🔗 <b>نام کاربری:</b> {username}\n"
-        f"🆔 <b>شناسهٔ عضو:</b> <code>{member.id}</code>\n"
-        f"📆 <b>تاریخ ورود:</b> {stamp.strftime('%Y/%m/%d')}\n"
-        f"🕰 <b>ساعت ورود:</b> {stamp.strftime('%H:%M:%S')}\n"
-        f"👥 <b>تعداد اعضا:</b> {count}\n\n"
-        "🌷 حضورت روشنی‌بخش جمع ماست؛ امیدواریم لحظه‌هایی سرشار از احترام، دوستی و خاطره‌های شیرین کنار هم بسازیم.\n"
-        "🛡️ <b>حفاظت گروه با MASIH GUARD S1000+</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "👑 <i>با مهر، کدنویس مسیح مختاری | Masih Hackring</i>"
-    )
+    uname = ("@" + esc(member.username)) if getattr(member,"username",None) else "ندارد"
+    return ("⚡ <b>MASIH GUARD</b> ⚡\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 <b>عضو جدید وارد شد!</b>\n\n"
+            f"👤 <b>نام کاربر:</b> {name}\n"
+            f"🆔 <b>آیدی:</b> <code>{member.id}</code>\n"
+            f"🔖 <b>شناسه:</b> {uname}\n"
+            f"📅 <b>تاریخ ورود:</b> {stamp.strftime('%Y-%m-%d')}\n"
+            f"🕒 <b>ساعت ورود:</b> {stamp.strftime('%H:%M:%S')}\n"
+            f"👥 <b>تعداد اعضا:</b> {count}\n\n"
+            "🛡️ <b>امنیت گروه فعال است</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "<i>ساخته‌شده با MASIH GUARD S1000+</i>")
 
 
 @bot.my_chat_member_handler()
@@ -1570,29 +1502,10 @@ def start_command(message):
         if len(args)>1: apply_referral(uid,args[1].strip())
         if is_owner(uid):
             send_panel(message.chat.id,user_id=uid)
-            bot.send_message(message.chat.id,public_features_text(),reply_markup=public_keyboard())
-        else:
-            bot.send_message(message.chat.id,public_features_text(),reply_markup=public_keyboard())
+        bot.send_message(message.chat.id,start_welcome_text(message.from_user),
+                         reply_markup=public_keyboard(),disable_web_page_preview=True)
         return
-    guide = (
-        "🛡️ <b>راهنمای امنیت و تنظیمات مسیح گارد</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "• ضدلینک و ضدتبلیغ: کنترل لینک‌ها و پیام‌های تبلیغاتی\n"
-        "• ضداسپم و ضدتکرار: محدودکردن پیام‌های پرتعداد و تکراری\n"
-        "• قفل رسانه: کنترل عکس، فیلم، فایل، استیکر و پیام صوتی\n"
-        "• کلمات ممنوع و فهرست مجاز: مدیریت محتوای گروه\n"
-        "• خوشامدگویی، خداحافظی، قوانین و تأیید ورود\n"
-        "• اخطارها، سکوت، اخراج، مسدودسازی و گزارش تخلف\n\n"
-        "📌 برای فعال‌سازی امکانات مدیریتی، ربات باید مدیر گروه باشد و گروه مجوز فعال داشته باشد.\n"
-        "⚙️ تنظیمات مدیریتی را مالک ربات از پنل خصوصی مدیریت می‌کند؛ این پیام فقط راهنماست."
-    )
-    try:
-        bot.send_message(message.chat.id, guide, reply_to_message_id=message.message_id)
-    except Exception as e:
-        print("Group start guide error:", repr(e))
-    if is_owner(uid):
-        try: send_panel(uid, user_id=uid)
-        except Exception: pass
+    bot.reply_to(message, group_start_guide(getattr(message.chat,"title","گروه")))
 
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
@@ -1612,85 +1525,16 @@ def ai_command(message):
     try: bot.edit_message_text(esc(answer[:3900]),status.chat.id,status.message_id)
     except Exception: bot.send_message(message.chat.id,esc(answer[:3900]))
 
-def known_groups_for_owner():
-    """Return known group IDs and names without asking the owner to type numeric IDs."""
-    found = {}
-    for key, rec in DATA.get("group_licenses", {}).items():
-        try: gid = int(key)
-        except (TypeError, ValueError): continue
-        if gid < 0:
-            rec_dict = rec if isinstance(rec, dict) else {}
-            found[gid] = str(rec_dict.get("title") or f"گروه {gid}")
-    for key, rec in DATA.get("groups", {}).items():
-        try: gid = int(key)
-        except (TypeError, ValueError): continue
-        if gid < 0:
-            title = (rec or {}).get("title") if isinstance(rec, dict) else ""
-            found.setdefault(gid, str(title or f"گروه {gid}"))
-    for key, rec in DATA.get("group_requests", {}).items():
-        try: gid = int(key)
-        except (TypeError, ValueError): continue
-        if gid < 0:
-            title = (rec or {}).get("title") if isinstance(rec, dict) else ""
-            found.setdefault(gid, str(title or f"گروه {gid}"))
-    return sorted(found.items(), key=lambda item: item[1].casefold())
-
-
-def group_picker_keyboard(action):
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    groups = known_groups_for_owner()
-    if not groups:
-        kb.add(types.InlineKeyboardButton("ℹ️ هنوز گروهی ثبت نشده؛ دستور فعال‌سازی را داخل گروه بفرست", callback_data="pickgroup:none:0"))
-    for gid, title in groups[:30]:
-        label = title[:42] + ("…" if len(title) > 42 else "")
-        kb.add(types.InlineKeyboardButton(f"🏘 {label}", callback_data=f"pickgroup:{action}:{gid}"))
-    kb.add(types.InlineKeyboardButton("❌ لغو", callback_data="pickgroup:cancel:0"))
-    return kb
-
-
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
         management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
         if management_action:
-            if not call.message:
-                bot.answer_callback_query(call.id, "پیام پنل پیدا نشد.", show_alert=True); return
-            # Owner may operate their own panel in the group where they opened it.
-            if call.message.chat.type != "private" and not is_owner(uid):
-                bot.answer_callback_query(call.id, "🔒 این گزینه فقط پس از فعال‌سازی و با مجوز مالک گروه باز می‌شود.", show_alert=True); return
-            if call.message.chat.type == "private" and call.message.chat.id != uid:
-                bot.answer_callback_query(call.id, "پنل خصوصی معتبر نیست.", show_alert=True); return
-            if not is_owner(uid) and data != "panel:open":
-                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
-        if data.startswith("locked:"):
-            bot.answer_callback_query(call.id, "🔒 این بخش قفل است؛ ابتدا مجوز گروه را از مالک دریافت کنید.", show_alert=True)
-            return
-        if data.startswith("deposit:"):
+            if not call.message or call.message.chat.type != "private" or call.message.chat.id != uid:
+                bot.answer_callback_query(call.id, "پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.", show_alert=True); return
             if not is_owner(uid):
-                bot.answer_callback_query(call.id, "⛔ فقط مالک می‌تواند رسید را بررسی کند.", show_alert=True); return
-            parts = data.split(":", 3)
-            if len(parts) != 4 or parts[1] not in {"approve", "reject"}:
-                bot.answer_callback_query(call.id, "درخواست رسید نامعتبر است.", show_alert=True); return
-            deposit_id = parts[2] + ":" + parts[3]
-            item = DATA.setdefault("pending_deposits", {}).get(deposit_id)
-            if not item or item.get("status") != "pending":
-                bot.answer_callback_query(call.id, "این رسید قبلاً بررسی شده یا وجود ندارد.", show_alert=True); return
-            if parts[1] == "reject":
-                item["status"] = "rejected"; item["reviewed_at"] = now_text(); item["reviewed_by"] = uid
-                save_data(); add_log("deposit_rejected", "", item.get("user_id", ""), f"deposit={deposit_id}")
-                try: bot.send_message(int(item["user_id"]), "❌ رسید افزایش موجودی تأیید نشد. اگر فکر می‌کنی اشتباهی شده، با پشتیبانی تماس بگیر.")
-                except Exception: pass
-                bot.answer_callback_query(call.id, "رسید رد شد.")
-                try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-                except Exception: pass
-                bot.send_message(uid, f"❌ رسید کاربر {item.get('user_id')} رد شد.")
-                return
-            target_uid = int(item.get("user_id", 0))
-            WAITING[uid] = {"action": "deposit_approve_amount", "target_uid": target_uid, "deposit_id": deposit_id}
-            bot.answer_callback_query(call.id, "مبلغ را وارد کن.")
-            bot.send_message(uid, f"💳 رسید کاربر <code>{target_uid}</code> بررسی شد. مبلغی را که واقعاً دریافت کرده‌ای به تومان وارد کن؛ فقط پس از تأیید واریز. برای لغو بنویس «لغو».")
-            return
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
         if data.startswith("payout:"):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
@@ -1719,9 +1563,18 @@ def callback_handler(call):
             if not call.message or call.message.chat.type!="private":
                 bot.answer_callback_query(call.id,"این گزینه را در گفت‌وگوی خصوصی ربات استفاده کن.",show_alert=True); return
             ensure_user(uid,call.from_user.username,call.from_user.first_name)
+            if data.startswith("user:receipt:"):
+                rid = data.split(":", 2)[2]
+                req = DATA.get("subscription_requests", {}).get(rid)
+                if not req or int(req.get("user_id", 0)) != int(uid) or req.get("status") != "pending":
+                    bot.answer_callback_query(call.id, "درخواست معتبر یا در انتظار پرداخت پیدا نشد.", show_alert=True)
+                    return
+                WAITING[uid] = {"action": "payment_receipt", "request_id": rid}
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid, f"📤 لطفاً عکس رسید پرداخت را همین‌جا ارسال کن.\\nشناسه درخواست: <code>{esc(rid)}</code>\\nشناسه عددی تلگرام تو: <code>{uid}</code>\\nتا بررسی مالک، اشتراک فعال نمی‌شود.")
+                return
             if data=="user:home":
                 bot.answer_callback_query(call.id); bot.send_message(uid,public_features_text(),reply_markup=public_keyboard()); return
-            if data=="user:deposit": bot.answer_callback_query(call.id); bot.send_message(uid,deposit_text(uid)); return
             if data=="user:wallet": bot.answer_callback_query(call.id); bot.send_message(uid,public_wallet(uid)); return
             if data=="user:shop": bot.answer_callback_query(call.id); bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard()); return
             if data=="user:referrals": bot.answer_callback_query(call.id); bot.send_message(uid,referral_text(uid)); return
@@ -1730,7 +1583,7 @@ def callback_handler(call):
                 WAITING[uid]={"action":"payout_amount"}
                 bot.answer_callback_query(call.id); bot.send_message(uid, f"💸 مبلغ برداشت را به تومان وارد کن. موجودی فعلی: {wallet(uid):,} تومان\nروش پرداخت را بعداً با مالک هماهنگ می‌کنی؛ اطلاعات بانکی را اینجا نفرست."); return
             if data=="user:font":
-                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۱۰۰ مدل فونت رایگان است. متن دلخواه را بفرست تا تبدیل شود."); return
+                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۱۰۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۱۰ پیام ۱۰تایی نمایش داده می‌شود."); return
             if data=="user:proxies":
                 bot.answer_callback_query(call.id)
                 bot.send_message(uid,proxy_list_text(limit=10, with_ping=False)); return
@@ -1741,89 +1594,17 @@ def callback_handler(call):
             if data.startswith("shop:request:"):
                 _,_,days,price=data.split(":")
                 result=request_subscription(uid,int(days),int(price))
-                bot.answer_callback_query(call.id); bot.send_message(uid,result,reply_markup=subscription_support_keyboard()); return
+                pending_rows = [(rid, req) for rid, req in DATA.get("subscription_requests", {}).items()
+                                if int(req.get("user_id", 0)) == int(uid) and req.get("status") == "pending"]
+                receipt_markup = types.InlineKeyboardMarkup(row_width=1)
+                if pending_rows:
+                    rid, _req = pending_rows[-1]
+                    receipt_markup.add(types.InlineKeyboardButton("📤 ارسال رسید پرداخت", callback_data=f"user:receipt:{rid}"))
+                receipt_markup.add(types.InlineKeyboardButton("👨‍💻 ارتباط با سازنده", url=OWNER_CONTACT_URL))
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid,result,reply_markup=receipt_markup)
+                return
 
-        if data.startswith("pickgroup:"):
-            if not is_owner(uid):
-                bot.answer_callback_query(call.id, "⛔ فقط مالک ربات می‌تواند گروه را انتخاب کند.", show_alert=True); return
-            parts = data.split(":", 2)
-            if len(parts) != 3:
-                bot.answer_callback_query(call.id, "درخواست نامعتبر است.", show_alert=True); return
-            action, raw_gid = parts[1], parts[2]
-            if action == "cancel":
-                bot.answer_callback_query(call.id, "لغو شد.")
-                try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-                except Exception: pass
-                return
-            if action == "none":
-                bot.answer_callback_query(call.id, "رباتی هنوز گروهی را ثبت نکرده است.", show_alert=True); return
-            try: gid = int(raw_gid)
-            except ValueError:
-                bot.answer_callback_query(call.id, "گروه معتبر نیست.", show_alert=True); return
-            if gid >= 0:
-                bot.answer_callback_query(call.id, "گروه معتبر نیست.", show_alert=True); return
-            bot.answer_callback_query(call.id)
-            if action.startswith("toggle_setting_"):
-                setting = action[len("toggle_setting_"):]
-                cfg = get_group_settings(gid)
-                if not isinstance(cfg.get(setting), bool):
-                    bot.send_message(uid, "⚠️ این تنظیم قابل تغییر نیست."); return
-                cfg[setting] = not cfg[setting]
-                save_data(); add_log("setting_toggled", gid, uid, f"{setting}={cfg[setting]}")
-                bot.send_message(uid, f"✅ تنظیم {esc(setting)} برای گروه تغییر کرد: {'روشن' if cfg[setting] else 'خاموش'}")
-                return
-            if action.startswith("show_"):
-                list_type = action[len("show_"):]
-                if list_type == "rules":
-                    bot.send_message(uid, "📜 <b>قوانین گروه</b>\n" + esc(get_group_settings(gid).get("rules", "قوانینی ثبت نشده است.")))
-                    return
-                if list_type in {"ban_list", "mute_list", "whitelist"}:
-                    if list_type == "whitelist":
-                        values = get_group_settings(gid).get("whitelist", [])
-                    else:
-                        kind = "banned" if list_type == "ban_list" else "muted"
-                        values = DATA.setdefault("moderation_lists", {}).get(str(gid), {}).get(kind, [])
-                    heading = "📋 <b>فهرست ثبت‌شده</b>"
-                    bot.send_message(uid, heading + "\n" + ("\n".join(f"• <code>{esc(x)}</code>" for x in values) if values else "فهرست خالی است."))
-                    return
-            if action == "group_stats":
-                gs = DATA.setdefault("group_stats", {}).get(str(gid), {})
-                active = len(DATA.setdefault("active_members", {}).get(str(gid), {}))
-                bot.send_message(uid, f"📊 <b>آمار گروه</b>\nپیام‌ها: {int(gs.get('messages',0))}\nمسدودشده‌ها: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
-                return
-            if action == "group_settings":
-                cfg = get_group_settings(gid)
-                labels = {"anti_link":"ضد لینک", "anti_ads":"ضد تبلیغ", "anti_spam":"ضد اسپم", "anti_repeat":"ضد تکرار", "anti_forward":"ضد فوروارد", "media_lock":"قفل رسانه", "smart_security":"امنیت هوشمند", "welcome_on":"خوشامدگویی", "farewell_on":"خداحافظی", "quiet_hours_on":"سکوت شبانه"}
-                rows = [f"{label}: {'روشن' if cfg.get(key, False) else 'خاموش'}" for key, label in labels.items()]
-                bot.send_message(uid, f"⚙️ <b>تنظیمات گروه</b>\n🛡 مجوز نصب: {'فعال' if is_group_licensed(gid) else 'غیرفعال'}\n" + "\n".join(rows) + f"\n📜 قوانین: {esc(cfg.get('rules',''))[:500]}")
-                return
-            if action == "revoke_group":
-                DATA.setdefault("group_licenses", {}).pop(str(gid), None)
-                sub = DATA.setdefault("subscriptions", {}).get(str(gid))
-                if isinstance(sub, dict): sub["status"] = "revoked"
-                add_log("group_license_revoked", gid, uid, "لغو مجوز از انتخاب گروه")
-                save_data()
-                bot.send_message(uid, f"⛔ مجوز گروه «{esc(dict(known_groups_for_owner()).get(gid, str(gid)))}» لغو شد.")
-                return
-            if action in {"activate_group", "extend_group"}:
-                WAITING[uid] = {"action": "activate_group_selected", "chat_id": gid, "extend": action == "extend_group"}
-                bot.send_message(uid, "مدت اعتبار را به تعداد روز وارد کن (هر عدد از ۱ تا ۳۶۵۰۰؛ عدد ۰ یعنی دائمی). برای لغو بنویس «لغو».")
-                return
-            if action == "announcement":
-                WAITING[uid] = {"action": "announcement_selected", "chat_id": gid}
-                bot.send_message(uid, "متن اطلاعیه‌ای را که باید در گروه انتخاب‌شده ارسال شود بفرست.")
-                return
-            if action in {"add_whitelist", "remove_whitelist", "member_info", "clear_warnings"}:
-                WAITING[uid] = {"action": action + "_selected", "chat_id": gid}
-                bot.send_message(uid, "شناسهٔ عددی کاربر موردنظر را وارد کن؛ شناسهٔ گروه لازم نیست.")
-                return
-            if action in {"welcome_text", "farewell_text", "rules", "auto_reply", "delete_reply", "bad_word", "warn_limit", "whitelist", "add_custom_command", "delete_custom_command", "quiet_hours", "welcome_image", "welcome_delete_seconds"}:
-                WAITING[uid] = {"action": action, "chat_id": gid}
-                prompts = {"welcome_text":"متن خوشامد را بفرست؛ {name} نام عضو را جایگزین می‌کند.", "farewell_text":"متن خداحافظی را بفرست.", "rules":"قوانین جدید را بفرست.", "auto_reply":"قالب: کلمه کلیدی | متن پاسخ", "delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.", "bad_word":"کلمه ممنوع را بفرست.", "warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "whitelist":"شناسهٔ کاربر را بفرست.", "add_custom_command":"قالب: نام فرمان | متن پاسخ", "delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"عکس را به‌صورت تصویر تلگرام بفرست؛ لینک اجباری نیست. برای حذف بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد را به ثانیه وارد کن (۰ تا ۳۶۰۰)."}
-                bot.send_message(uid, "📍 گروه انتخاب شد: " + esc(dict(known_groups_for_owner()).get(gid, str(gid))) + "\n" + prompts.get(action, "مقدار تنظیم را بفرست."))
-                return
-            bot.answer_callback_query(call.id, "این عملیات در انتخاب گروه پشتیبانی نشده است.", show_alert=True)
-            return
         if data.startswith("group_rules:"):
             try: target=int(data.split(":",1)[1])
             except ValueError: target=0
@@ -1861,20 +1642,12 @@ def callback_handler(call):
             setting=data.split(":",1)[1]
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
-            if call.message and call.message.chat.type in ("group", "supergroup") and setting not in {"smart_security"}:
-                cfg=get_group_settings(call.message.chat.id)
-                if not isinstance(cfg.get(setting), bool):
-                    bot.answer_callback_query(call.id,"این تنظیم قابل تغییر نیست.",show_alert=True); return
-                cfg[setting]=not cfg[setting]; save_data(); add_log("setting_toggled",call.message.chat.id,uid,f"{setting}={cfg[setting]}")
-                bot.answer_callback_query(call.id,"وضعیت تنظیم تغییر کرد.")
-                send_panel(call.message.chat.id,PANEL_CURRENT.get(uid,"home"),call.message.message_id,user_id=uid)
-                return
             if setting=="smart_security":
                 DATA["settings"]["smart_security"]=not DATA["settings"].get("smart_security",True); save_data()
                 bot.answer_callback_query(call.id,"امنیت هوشمند سراسری: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
+            WAITING[uid]={"action":"toggle_group_setting","setting":"smart_security" if setting=="group_smart_security" else setting}
             bot.answer_callback_query(call.id)
-            if setting == "group_smart_security": setting = "smart_security"
-            bot.send_message(uid, "🏘 گروهی را که می‌خواهی تنظیمش تغییر کند انتخاب کن؛ شناسهٔ عددی لازم نیست.", reply_markup=group_picker_keyboard("toggle_setting_" + setting))
+            bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با ‎-100‎ شروع می‌شود).")
             return
         if data.startswith("ask:"):
             if not is_owner(uid):
@@ -1882,11 +1655,6 @@ def callback_handler(call):
             action=data.split(":",1)[1]
             global_actions={"public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs"}
             if action in global_actions:
-                group_scoped = {"add_whitelist", "remove_whitelist", "member_info", "clear_warnings", "activate_group", "extend_group", "revoke_group", "announcement", "group_stats", "group_settings"}
-                if action in group_scoped and call.message and call.message.chat.type == "private":
-                    bot.answer_callback_query(call.id)
-                    bot.send_message(uid, "🏘 گروه موردنظر را از فهرست انتخاب کن؛ نیازی به تایپ شناسهٔ عددی نیست.", reply_markup=group_picker_keyboard(action))
-                    return
                 WAITING[uid]={"action":action}
                 prompts={
                     "public_features":"متن معرفی کاربران در /start را بفرست. برای رفتن به خط بعدی از خط جدید استفاده کن؛ این متن به‌صورت ساده نمایش داده می‌شود.",
@@ -1898,8 +1666,8 @@ def callback_handler(call):
                     "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
                     "member_info":"شناسه گروه | شناسه کاربر را بفرست.",
                     "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.",
-                    "activate_group":"برای فعال‌سازی بدون شناسه، ربات را به گروه مشتری اضافه کن و همان‌جا بنویس: فعال سازی مسیح گارد 30 روزه (یا هر تعداد روز). برای مجوز دائمی عدد ۰ روزه بنویس.",
-                    "extend_group":"برای تمدید بدون شناسه، در همان گروه بنویس: فعال سازی مسیح گارد 30 روزه (یا هر تعداد روز).",
+                    "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.",
+                    "extend_group":"شناسه گروه | تعداد روز را بفرست.",
                     "revoke_group":"شناسه گروه را بفرست.",
                     "announcement":"شناسه گروه | متن اطلاعیه را بفرست.",
                     "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).",
@@ -1909,24 +1677,22 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
             group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","quiet_hours","welcome_image","welcome_delete_seconds"}
             if action in group_actions:
-                if call.message and call.message.chat.type in ("group", "supergroup") and is_owner(uid):
-                    WAITING[uid]={"action":action,"chat_id":call.message.chat.id}
-                    bot.answer_callback_query(call.id)
-                    prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام عضو را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.","whitelist":"شناسه کاربر را بفرست.","add_custom_command":"قالب: نام فرمان | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.","quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.","welcome_image":"عکس را همین‌جا به‌صورت تصویر تلگرام بفرست؛ لینک اجباری نیست. برای حذف بنویس حذف.","welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
-                    bot.send_message(uid, "📍 گروه انتخاب‌شده: " + esc(getattr(call.message.chat,"title","گروه")) + "\n" + prompts.get(action,"مقدار تنظیم را بفرست.")); return
-                bot.answer_callback_query(call.id)
-                bot.send_message(uid,"🏘 گروه موردنظر را از فهرست انتخاب کن؛ نیازی به تایپ شناسهٔ عددی نیست.", reply_markup=group_picker_keyboard(action))
-                return
+                WAITING[uid]={"action":"select_group_for_action","next_action":action}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"برای فعال‌سازی بدون شناسه، ربات را به گروه مشتری اضافه کن و همان‌جا بنویس: فعال سازی مسیح گارد 30 روزه (یا هر تعداد روز). برای مجوز دائمی عدد ۰ روزه بنویس.", "extend_group":"برای تمدید بدون شناسه، در همان گروه بنویس: فعال سازی مسیح گارد 30 روزه (یا هر تعداد روز).", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"عکس را همین‌جا به‌صورت تصویر تلگرام بفرست تا file_id ذخیره شود؛ یا لینک مستقیم https:// بفرست. برای حذف بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"شناسه گروه | تعداد روز (برای دائمی عدد ۰) را بفرست.", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             action=data.split(":",1)[1]
-            if action in {"ban_list","mute_list","whitelist","rules"}:
-                bot.answer_callback_query(call.id)
-                bot.send_message(uid, "🏘 گروه موردنظر را انتخاب کن؛ شناسهٔ عددی لازم نیست.", reply_markup=group_picker_keyboard("show_" + action))
+            if action in {"ban_list","mute_list","whitelist"}:
+                WAITING[uid]={"action":"show_list_group","list_type":action}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست (مثلاً -1001234567890).")
+                return
+            if action == "rules":
+                WAITING[uid]={"action":"show_rules_group"}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا قوانین همان گروه نمایش داده شود.")
                 return
             WAITING[uid]={"action":"show_"+action,"chat_id":chat_id}
             bot.answer_callback_query(call.id); handle_show(uid,action); WAITING.pop(uid,None); return
@@ -1939,37 +1705,51 @@ def callback_handler(call):
         try: bot.answer_callback_query(call.id,"خطا رخ داد؛ دوباره تلاش کن.",show_alert=True)
         except Exception: pass
 
+@bot.message_handler(content_types=["photo"], func=lambda m: m.chat.type == "private")
+def private_receipt_photo_handler(message):
+    uid = int(message.from_user.id)
+    pending = WAITING.get(uid, {})
+    if pending.get("action") != "payment_receipt":
+        return
+    rid = str(pending.get("request_id", ""))
+    req = DATA.get("subscription_requests", {}).get(rid)
+    if not req or int(req.get("user_id", 0)) != uid or req.get("status") != "pending":
+        WAITING.pop(uid, None)
+        bot.reply_to(message, "⚠️ درخواست پرداخت معتبر نیست یا قبلاً بررسی شده است.")
+        return
+    photo = getattr(message, "photo", None) or []
+    if not photo:
+        bot.reply_to(message, "لطفاً عکس رسید را به‌صورت تصویر ارسال کن.")
+        return
+    file_id = getattr(photo[-1], "file_id", "")
+    if not file_id:
+        bot.reply_to(message, "⚠️ دریافت شناسهٔ تصویر ناموفق بود؛ دوباره ارسال کن.")
+        return
+    req["receipt_file_id"] = file_id
+    req["receipt_user_id"] = uid
+    req["receipt_received_at"] = now_text()
+    req["receipt_message_id"] = int(message.message_id)
+    save_data()
+    caption = (f"🧾 <b>رسید پرداخت اشتراک</b>\nدرخواست: <code>{esc(rid)}</code>\n"
+               f"شناسه عددی کاربر: <code>{uid}</code>\nمدت: {int(req.get('days', 0))} روز\n"
+               f"مبلغ: {int(req.get('price_toman', 0)):,} تومان\n"
+               "⚠️ رسید را دستی بررسی کن؛ دریافت تصویر به معنی تأیید پرداخت نیست.")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("✅ تأیید و فعال‌سازی", callback_data=f"subreq:approve:{rid}"),
+           types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"subreq:reject:{rid}"))
+    try:
+        bot.send_photo(OWNER_ID, file_id, caption=caption, reply_markup=kb)
+        WAITING.pop(uid, None)
+        bot.reply_to(message, "✅ رسید برای مالک ارسال شد. پس از بررسی، نتیجه اعلام می‌شود؛ اشتراک هنوز فعال نشده است.")
+    except Exception as e:
+        print("Receipt forwarding error:", repr(e))
+        bot.reply_to(message, "⚠️ رسید ذخیره شد، اما ارسال آن به مالک ناموفق بود. کمی بعد دوباره تلاش کن.")
+
+
 @bot.message_handler(content_types=["text"], func=lambda m: m.chat.type=="private")
 def private_text_handler(message):
     uid=message.from_user.id; text=(message.text or "").strip()
     ensure_user(uid,message.from_user.username,message.from_user.first_name)
-    if text.startswith("/unbanrequest"):
-        parts = text.split(maxsplit=2)
-        if len(parts) < 2:
-            bot.reply_to(message, "قالب درخواست: /unbanrequest شناسه_گروه دلیل_درخواست\nشناسه گروه را از مدیر یا پیام /id بگیر.")
-            return
-        try:
-            group_id = int(parts[1])
-        except ValueError:
-            bot.reply_to(message, "شناسه گروه باید عددی باشد؛ نمونه: /unbanrequest -1001234567890 دلیل")
-            return
-        reason = parts[2].strip()[:500] if len(parts) > 2 else "درخواست بررسی رفع مسدودی"
-        req_id = str(int(time.time() * 1000)) + "_" + str(uid)
-        request = {"id": req_id, "user_id": uid, "group_id": group_id, "reason": reason,
-                   "status": "pending", "time": now_text()}
-        DATA.setdefault("unban_requests", {})[req_id] = request
-        add_log("unban_request", group_id, uid, reason[:200])
-        save_data()
-        bot.reply_to(message, "📨 درخواستت ثبت شد و برای مالک ربات فرستاده شد. ثبت درخواست به‌معنی تأیید رفع مسدودی نیست.")
-        try:
-            bot.send_message(OWNER_ID,
-                "📨 <b>درخواست رفع مسدودی</b>\n"
-                f"شناسه درخواست: <code>{esc(req_id)}</code>\n"
-                f"کاربر: <code>{uid}</code>\nگروه: <code>{group_id}</code>\n"
-                f"دلیل: {esc(reason)}\nزمان: {esc(request['time'])}")
-        except Exception as e:
-            print("Unban request owner notice error:", repr(e))
-        return
     if text.startswith("/"): return
     # AI trigger requested by the owner: only «هوش» or a reply to the bot activates it.
     normalized_private = text.replace("ي", "ی").replace("ك", "ک").strip().casefold()
@@ -1994,30 +1774,26 @@ def private_text_handler(message):
         except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
         return
     # Direct public tools work without opening a panel first.
-    normalized_game = re.sub(r"[\u200c\s]+", " ", text.replace("ي", "ی").replace("ك", "ک").strip()).casefold()
-    if normalized_game == "بازی":
-        bot.reply_to(message, game_menu_text(), parse_mode="HTML"); return
-    game_match = re.fullmatch(r"بازی (بسکتبال|فوتبال|بولینگ|دارت|تاس|اسلات)", normalized_game)
-    if game_match:
-        play_telegram_game(message, game_match.group(1)); return
     if text.casefold() in {"پروکسی", "پروکسی‌ها", "پروکسی ها"}:
         bot.send_message(uid,proxy_list_text(limit=10, with_ping=False))
         return
-    normalized_font = text.replace("ي", "ی").replace("ك", "ک").strip()
-    if normalized_font.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
-        bot.reply_to(message,"🔤 متن دلخواهت را به شکل «فونت متن‌دلخواه» بفرست تا ۱۰۰ مدل دریافت کنی."); return
-    if normalized_font.casefold().startswith("فونت "):
-        send_font_results(message, normalized_font[5:].strip()); return
+    if text.casefold() in {"فونت", "فونت‌ساز", "فونت ساز"}:
+        WAITING[uid]={"action":"public_font_text"}; bot.send_message(uid,"🔤 ۱۰۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۱۰ پیام ۱۰تایی نمایش داده می‌شود."); return
+    if text.casefold().startswith("فونت "):
+        raw=text[5:].strip()
+        if len(raw)>120:
+            bot.send_message(uid,"برای نمایش ۱۰۰ سبک، متن حداکثر ۱۲۰ نویسه باشد."); return
+        WAITING[uid]={"action":"public_font_name","font_text":raw}
+        bot.send_message(uid,"اسم دلخواه را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم."); return
     public_shortcuts = {
         "کیف پول": "user:wallet", "موجودی": "user:wallet", "wallet": "user:wallet",
-        "افزایش موجودی": "user:deposit", "شارژ کیف پول": "user:deposit", "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
+        "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
         "زیرمجموعه": "user:referrals", "دعوت‌ها": "user:referrals", "دعوت ها": "user:referrals",
         "تراکنش": "user:transactions", "تراکنش‌ها": "user:transactions", "تراکنش ها": "user:transactions",
         "امکانات": "user:home", "راهنما": "user:home", "help": "user:home",
     }
     shortcut = public_shortcuts.get(text.casefold())
     if shortcut == "user:wallet": bot.send_message(uid, public_wallet(uid)); return
-    if shortcut == "user:deposit": bot.send_message(uid, deposit_text(uid)); return
     if shortcut == "user:shop": bot.send_message(uid, shop_text(uid), reply_markup=shop_keyboard()); return
     if shortcut == "user:referrals": bot.send_message(uid, referral_text(uid)); return
     if shortcut == "user:transactions": bot.send_message(uid, transactions_text(uid)); return
@@ -2025,95 +1801,9 @@ def private_text_handler(message):
     pending=WAITING.get(uid)
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
-    if action == "activate_group_selected":
-        if text.casefold() in {"لغو", "cancel", "/cancel"}:
-            WAITING.pop(uid, None); bot.send_message(uid, "عملیات لغو شد."); return
-        try:
-            days = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
-            if not 0 <= days <= 36500: raise ValueError
-            from datetime import timedelta
-            gid = int(chat_id); old = DATA.setdefault("group_licenses", {}).get(str(gid), {}); now = datetime.now()
-            me = bot.get_me()
-            bot_member = bot.get_chat_member(gid, me.id)
-            if getattr(bot_member, "status", "") not in ("administrator", "creator"):
-                bot.send_message(uid, "⚠️ فعال‌سازی انجام نشد؛ ربات باید در گروه انتخاب‌شده مدیر باشد.")
-                return
-            if days == 0: expires = ""
-            else:
-                base = now
-                if pending.get("extend") and old.get("approved") and old.get("expires"):
-                    try:
-                        previous = datetime.strptime(old["expires"], "%Y-%m-%d %H:%M:%S")
-                        if previous > now: base = previous
-                    except ValueError: pass
-                expires = (base + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-            DATA["group_licenses"][str(gid)] = {"approved": True, "expires": expires, "activated_by": uid, "updated": now_text(), "days": days, "title": dict(known_groups_for_owner()).get(gid, str(gid))}
-            DATA.setdefault("subscriptions", {})[str(gid)] = {"days": days, "started": now_text(), "expires": expires, "status": "active", "source": "owner_panel"}
-            add_log("group_license_extended" if pending.get("extend") else "group_license_activated", gid, uid, f"days={days}")
-            save_data(); WAITING.pop(uid, None)
-            bot.send_message(uid, f"✅ مجوز گروه ثبت شد.\n📅 مدت: {'دائمی' if days == 0 else str(days)+' روز'}\n🕒 پایان اعتبار: {esc(expires or 'دائمی')}")
-            try: bot.send_message(gid, f"🛡️ <b>مجوز نصب MASIH GUARD فعال شد</b>\n📅 مدت: {'دائمی' if days == 0 else str(days)+' روز'}\n🕒 پایان اعتبار: {esc(expires or 'دائمی')}\n👑 مدیریت و پشتیبانی: مسیح مختاری")
-            except Exception: bot.send_message(uid, "⚠️ مجوز ذخیره شد، اما پیام تأیید به گروه ارسال نشد؛ دسترسی ارسال پیام ربات را بررسی کن.")
-        except (ValueError, TypeError):
-            bot.send_message(uid, "⚠️ تعداد روز معتبر نیست. عددی از ۰ تا ۳۶۵۰۰ وارد کن؛ ۰ یعنی دائمی.")
-        return
-    if action == "announcement_selected":
-        if not text: bot.send_message(uid, "متن اطلاعیه خالی است."); return
-        gid = int(chat_id)
-        if not is_group_licensed(gid): bot.send_message(uid, "⚠️ گروه مجوز فعال ندارد."); WAITING.pop(uid, None); return
-        bot.send_message(gid, "📣 <b>اطلاعیهٔ مدیریت</b>\n━━━━━━━━━━━━━━\n" + esc(text[:3500]))
-        add_log("announcement", gid, uid, text[:150]); save_data(); WAITING.pop(uid, None); bot.send_message(uid, "✅ اطلاعیه ارسال شد."); return
-    if action in {"add_whitelist_selected", "remove_whitelist_selected", "member_info_selected", "clear_warnings_selected"}:
-        try: member_id = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")))
-        except ValueError: bot.send_message(uid, "شناسهٔ کاربر باید عددی باشد."); return
-        gid = int(chat_id)
-        if action == "add_whitelist_selected":
-            cfg=get_group_settings(gid); vals={str(x) for x in cfg.get("whitelist",[])}; vals.add(str(member_id)); cfg["whitelist"]=sorted(vals); save_data(); bot.send_message(uid, "✅ کاربر به فهرست مجاز گروه اضافه شد.")
-        elif action == "remove_whitelist_selected":
-            cfg=get_group_settings(gid); cfg["whitelist"]=[x for x in cfg.get("whitelist",[]) if str(x)!=str(member_id)]; save_data(); bot.send_message(uid, "✅ کاربر از فهرست مجاز گروه حذف شد.")
-        elif action == "clear_warnings_selected":
-            DATA.setdefault("warnings", {}).pop(f"{gid}:{member_id}", None); save_data(); bot.send_message(uid, "✅ اخطارهای ثبت‌شدهٔ کاربر پاک شد.")
-        else:
-            try:
-                m=bot.get_chat_member(gid, member_id)
-                bot.send_message(uid, f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(getattr(m.user,'first_name',''))}\nنام کاربری: @{esc(getattr(m.user,'username','') or 'ندارد')}\nوضعیت: {esc(m.status)}")
-            except Exception: bot.send_message(uid, "⚠️ اطلاعات عضو دریافت نشد؛ ممکن است شناسه اشتباه باشد یا ربات به گروه دسترسی نداشته باشد.")
-        WAITING.pop(uid, None); return
-    if action == "deposit_approve_amount":
-        if text.casefold() in {"لغو", "cancel", "/cancel"}:
-            WAITING.pop(uid, None); bot.send_message(uid, "عملیات شارژ رسید لغو شد؛ رسید همچنان در انتظار بررسی است."); return
-        try:
-            amount = int(text.replace(",", "").replace("٬", "").replace(" ", ""))
-            if not 1 <= amount <= 10000000:
-                raise ValueError
-        except (ValueError, TypeError):
-            bot.send_message(uid, "⚠️ مبلغ معتبر نیست. مبلغ واقعی دریافتی را به تومان وارد کن یا برای لغو بنویس «لغو»."); return
-        deposit_id = str(pending.get("deposit_id", ""))
-        item = DATA.setdefault("pending_deposits", {}).get(deposit_id)
-        target_uid = int(pending.get("target_uid", 0))
-        if not item or item.get("status") != "pending" or int(item.get("user_id", 0)) != target_uid:
-            WAITING.pop(uid, None); bot.send_message(uid, "⚠️ این رسید دیگر در انتظار تأیید نیست یا شناسهٔ آن معتبر نیست."); return
-        # Mark first so transaction() persists the approved state and balance together.
-        item["status"] = "approved"; item["amount_toman"] = amount; item["reviewed_at"] = now_text(); item["reviewed_by"] = uid
-        if not transaction(target_uid, amount, f"افزایش موجودی با رسید تأییدشده {deposit_id}"):
-            item["status"] = "pending"; item.pop("amount_toman", None); item.pop("reviewed_at", None); item.pop("reviewed_by", None)
-            save_data(); bot.send_message(uid, "⚠️ ثبت تراکنش ناموفق بود؛ موجودی تغییر نکرد."); return
-        save_data(); add_log("deposit_approved", "", target_uid, f"amount_toman={amount}; deposit={deposit_id}")
-        WAITING.pop(uid, None)
-        bot.send_message(uid, f"✅ رسید تأیید و {amount:,} تومان به کیف پول کاربر {target_uid} اضافه شد. موجودی جدید: {wallet(target_uid):,} تومان")
-        try: bot.send_message(target_uid, f"✅ رسید پرداختت تأیید شد. مبلغ شارژشده: {amount:,} تومان\n💳 موجودی جدید: {wallet(target_uid):,} تومان")
-        except Exception: pass
-        return
-    if action == "deposit_receipt":
-        if text.casefold() in {"لغو", "cancel", "/cancel"}:
-            WAITING.pop(uid, None)
-            bot.send_message(uid, "درخواست افزایش موجودی لغو شد.")
-        else:
-            bot.send_message(uid, "برای تکمیل افزایش موجودی، لطفاً تصویر رسید واریز را به‌صورت عکس یا فایل همین‌جا بفرست. برای لغو بنویس «لغو».")
-        return
-    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action","deposit_approve_amount",
+    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
                 "public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
-                "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","activate_group_selected","announcement_selected","add_whitelist_selected","remove_whitelist_selected","member_info_selected","clear_warnings_selected"}
+                "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
@@ -2184,7 +1874,7 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"عکس را همین‌جا به‌صورت تصویر تلگرام بفرست تا file_id ذخیره شود؛ یا لینک مستقیم https:// بفرست. برای حذف بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
         if action=="whitelist":
             target=int(text)
@@ -2342,19 +2032,25 @@ def private_text_handler(message):
                 bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
             except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
         elif action == "public_font_text":
-            WAITING.pop(uid, None)
-            send_font_results(message, text)
+            if len(text) > 120: raise ValueError("برای نمایش ۱۰۰ سبک، متن حداکثر ۱۲۰ نویسه باشد.")
+            WAITING[uid]={"action":"public_font_name","font_text":text}
+            bot.send_message(uid,"حالا اسم دلخواهت را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم.")
             return
         elif action == "public_font_name":
-            # Compatibility with any older pending state: convert the stored text, ignore title input.
             raw=pending.get("font_text", "")
-            WAITING.pop(uid, None)
-            send_font_results(message, raw)
-            return
+            label="" if text.casefold() in {"بدون اسم","ندارد","نه"} else text[:50]
+            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>۱۰۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
+            variants=font_variants(raw)
+            for start in range(0, 100, 10):
+                lines=[]
+                for idx,(name,value) in enumerate(variants[start:start+10], start=start+1):
+                    lines.append(f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>")
+                bot.send_message(uid, (heading if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,100)})</b>\n━━━━━━━━━━━━━━\n") + "\n\n".join(lines))
         elif action in ("public_font","font"):
-            WAITING.pop(uid, None)
-            send_font_results(message, text[:120])
-            return
+            variants=font_variants(text[:120])
+            for start in range(0,100,10):
+                lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10],start=start+1)]
+                bot.send_message(uid, ("🔤 <b>۱۰۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,100)})</b>\n━━━━━━━━━━━━━━\n")+"\n\n".join(lines))
         elif action in ("welcome_text","farewell_text","rules"):
             s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
         elif action=="auto_reply":
@@ -2424,71 +2120,13 @@ def private_text_handler(message):
         elif action.startswith("show_"): handle_show(uid,action[5:])
         else:
             WAITING.pop(uid,None)
-            bot.send_message(uid, f"⚠️ عملیات «{esc(action or 'نامشخص')}» هنوز به عملکردی متصل نشده است؛ این گزینه نیاز به تکمیل جداگانه دارد. از دکمهٔ مدیریت برای برگشت استفاده کن.")
+            bot.send_message(uid,"⚠️ این گزینه به این نسخه متصل نشده است. پنل را از /panel باز کن و اگر تکرار شد، نام همان دکمه را برای اصلاح بفرست.")
             return
         WAITING.pop(uid,None)
     except (ValueError,TypeError,PermissionError) as e:
         bot.send_message(uid,"⚠️ ورودی یا دسترسی معتبر نیست.\n"+esc(str(e)))
     except Exception as e:
         print("Private action error:",repr(e)); bot.send_message(uid,"⚠️ عملیات ناموفق بود؛ دسترسی ربات و اطلاعات واردشده را بررسی کن.")
-
-@bot.message_handler(content_types=["photo", "document"], func=lambda m: m.chat.type == "private")
-def private_deposit_receipt_handler(message):
-    uid = message.from_user.id if message.from_user else 0
-    pending = WAITING.get(uid, {})
-    if pending.get("action") == "welcome_image" and is_owner(uid):
-        if message.content_type == "photo" and message.photo:
-            file_id = message.photo[-1].file_id
-            # Save the Telegram file_id for each already-configured group; it remains reusable.
-            for group_id in list(DATA.get("groups", {})):
-                get_group_settings(group_id)["welcome_image"] = file_id
-            DATA.setdefault("bot_settings", {}).setdefault("welcome_image_file_id", file_id)
-            save_data(); WAITING.pop(uid, None)
-            bot.reply_to(message, "✅ عکس خوشامد با file_id تلگرام ذخیره شد. برای گروه‌های تنظیم‌شده استفاده می‌شود.")
-        else:
-            bot.reply_to(message, "🖼 لطفاً عکس را به‌صورت تصویر تلگرام بفرست؛ لینک اجباری نیست.")
-        return
-    if pending.get("action") != "deposit_receipt":
-        return
-    user = message.from_user
-    username = f"@{user.username}" if getattr(user, "username", None) else "ندارد"
-    first_name = getattr(user, "first_name", "") or "بدون نام"
-    caption = ("🧾 <b>رسید افزایش موجودی جدید</b>\n"
-               f"👤 نام: {esc(first_name)}\n"
-               f"🔗 آیدی: {esc(username)}\n"
-               f"🆔 شناسه عددی خریدار: <code>{uid}</code>\n"
-               f"💬 چت خصوصی خریدار: <code>{uid}</code>\n"
-               f"🕒 زمان دریافت: {esc(now_text())}\n"
-               "⚠️ رسید را بررسی کن؛ تا قبل از تأیید، موجودی را شارژ نکن.")
-    try:
-        file_unique_id = ""
-        if message.content_type == "photo" and message.photo:
-            file_unique_id = str(message.photo[-1].file_unique_id)
-        elif message.content_type == "document" and message.document:
-            file_unique_id = str(message.document.file_unique_id)
-        if file_unique_id:
-            for existing in DATA.setdefault("pending_deposits", {}).values():
-                if int(existing.get("user_id", 0)) == uid and existing.get("file_unique_id") == file_unique_id:
-                    bot.reply_to(message, "⚠️ همین رسید قبلاً ارسال شده؛ از ارسال تکراری خودداری کن.")
-                    return
-        deposit_id = f"{uid}:{message.message_id}"
-        DATA.setdefault("pending_deposits", {})[deposit_id] = {
-            "user_id": uid, "file_unique_id": file_unique_id, "status": "pending",
-            "created": now_text(), "username": username, "first_name": first_name
-        }
-        save_data()
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.row(types.InlineKeyboardButton("✅ تأیید رسید", callback_data=f"deposit:approve:{uid}:{message.message_id}"),
-               types.InlineKeyboardButton("❌ رد رسید", callback_data=f"deposit:reject:{uid}:{message.message_id}"))
-        bot.send_message(OWNER_ID, caption + "\n\n👇 پس از بررسی واقعی واریز، رسید را تأیید یا رد کن.", reply_markup=kb)
-        bot.forward_message(OWNER_ID, uid, message.message_id)
-        WAITING.pop(uid, None)
-        add_log("deposit_receipt_received", "", uid, f"username={username}; first_name={first_name}; deposit={deposit_id}")
-        save_data()
-        bot.reply_to(message, "✅ رسیدت برای مالک ارسال شد. پس از بررسی و تأیید مبلغ واقعی واریز، موجودی شارژ می‌شود. شناسه عددی تو برای مالک هم ارسال شد.")
-    except Exception as e:
-        print("Deposit receipt forwarding error:", repr(e))
-        bot.reply_to(message, "⚠️ ارسال رسید ناموفق شد. لطفاً چند لحظه بعد دوباره بفرست یا به سازنده @Ma3ih01 پیام بده.")
 
 if __name__ == "__main__":
     print(f"{BRAND} {VERSION}: starting polling")
