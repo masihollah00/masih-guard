@@ -561,35 +561,65 @@ def subscription_support_keyboard():
     return kb
 
 def shop_keyboard():
+    """Compact subscription menu using real Telegram inline buttons."""
     kb = types.InlineKeyboardMarkup(row_width=1)
-    labels = {30: "🥉 اشتراک ۱ ماهه — 40,000 تومان", 60: "🥈 اشتراک ۲ ماهه — 80,000 تومان", 90: "🥇 اشتراک ۳ ماهه — 120,000 تومان"}
+    labels = {
+        30: "🥉 ۳۰ روزه  ·  ۴۰٬۰۰۰ تومان",
+        60: "🥈 ۶۰ روزه  ·  ۸۰٬۰۰۰ تومان",
+        90: "🥇 ۹۰ روزه  ·  ۱۲۰٬۰۰۰ تومان",
+    }
     for days, price in SUBSCRIPTION_PACKAGES:
-        kb.add(types.InlineKeyboardButton(labels.get(days, f"⭐ {days} روز — {price:,} تومان"), callback_data=f"shop:request:{days}:{price}"))
-    kb.add(types.InlineKeyboardButton("👨‍💻 پیام به سازنده / اطلاعات پرداخت", url=OWNER_CONTACT_URL))
-    kb.add(types.InlineKeyboardButton("⬅️ منوی کاربر", callback_data="user:home"))
+        kb.add(types.InlineKeyboardButton(
+            labels.get(days, f"⭐ {days} روز  ·  {price:,} تومان"),
+            callback_data=f"shop:request:{days}:{price}"
+        ))
+    kb.row(types.InlineKeyboardButton("💳 کیف پول", callback_data="user:wallet"),
+           types.InlineKeyboardButton("🧾 تراکنش‌ها", callback_data="user:transactions"))
+    kb.add(types.InlineKeyboardButton("👨‍💻 پشتیبانی و اطلاعات پرداخت", url=OWNER_CONTACT_URL))
+    kb.add(types.InlineKeyboardButton("⬅️ بازگشت به منو", callback_data="user:home"))
     return kb
+
 
 def shop_text(uid):
     sub = DATA.setdefault("subscriptions", {}).get(str(uid), {})
-    expiry = sub.get("expires", "اشتراک فعال نیست")
-    package_text = "\\n".join(f"⭐ {days} روز: {price:,} تومان" for days, price in SUBSCRIPTION_PACKAGES)
+    expiry = sub.get("expires") or "اشتراک فعال نیست"
+    package_text = "\n".join(
+        f"  ├ {days} روز  ·  <b>{price:,} تومان</b>"
+        for days, price in SUBSCRIPTION_PACKAGES
+    )
+    status_icon = "🟢" if sub.get("expires") else "⚪"
+    lines = [
+        "💠 <b>مرکز اشتراک</b>",
+        "<b>MASIH GUARD S1000+</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"{status_icon} وضعیت: <b>{'فعال' if sub.get('expires') else 'غیرفعال'}</b>",
+        f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>",
+        f"📅 پایان اشتراک: <b>{esc(expiry)}</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "💎 <b>بسته‌ات رو انتخاب کن</b>",
+        package_text,
+        "",
+        "🧾 <b>مراحل خرید</b>",
+        "۱. یکی از بسته‌های بالا را انتخاب کن.",
+        "۲. درخواست خرید برای مالک ثبت می‌شود.",
+        "۳. مبلغ دقیق را پرداخت کن و از دکمهٔ «ارسال رسید پرداخت» عکس رسید را بفرست.",
+        "۴. اشتراک پس از بررسی و تأیید مالک فعال می‌شود.",
+        "",
+    ]
     if CARD_NUMBER and CARD_HOLDER:
-        payment_text = f"۲) شماره کارت: <code>{esc(CARD_NUMBER)}</code>\\n👤 به نام: <b>{esc(CARD_HOLDER)}</b>\\n"
+        lines.extend([
+            "💳 <b>اطلاعات پرداخت</b>",
+            f"شماره کارت: <code>{esc(CARD_NUMBER)}</code>",
+            f"به نام: <b>{esc(CARD_HOLDER)}</b>",
+        ])
     else:
-        payment_text = "۲) اطلاعات کارت هنوز در تنظیمات هاست ثبت نشده؛ از دکمهٔ «پیام به سازنده» اطلاعات معتبر را بگیر.\\n"
-    return ("🌈 <b>خرید اشتراک MASIH GUARD S1000+</b>\\n"
-            "━━━━━━━━━━━━━━━━━━━━\\n"
-            "✨ <b>بسته‌های اشتراک</b>\\n"
-            f"{package_text}\\n\\n"
-            f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>\\n"
-            f"📅 پایان اشتراک فعلی: <b>{esc(expiry)}</b>\\n\\n"
-            "🧾 <b>روش خرید و فعال‌سازی</b>\\n"
-            "۱) بستهٔ موردنظرت را انتخاب کن تا درخواست خرید ثبت شود.\\n"
-            + payment_text
-            + "۳) مبلغ دقیق همان بسته را انتقال بده و پس از ثبت درخواست، از دکمهٔ «ارسال رسید پرداخت» عکس رسید را برای ربات بفرست.\\n"
-            "۴) مالک رسید را دستی بررسی می‌کند؛ اشتراک فقط پس از تأیید مالک فعال می‌شود.\\n\\n"
-            "🔒 رمز کارت، رمز پویا یا اطلاعات ورود بانکی را برای هیچ‌کس ارسال نکن.\\n"
-            "👨‍💻 اگر اطلاعات کارت نمایش داده نشد، از دکمهٔ پیام به سازنده استفاده کن.")
+        lines.append("💬 برای دریافت اطلاعات پرداخت معتبر، دکمهٔ «پشتیبانی و اطلاعات پرداخت» را بزن.")
+    lines.extend([
+        "",
+        "🔒 رمز کارت، رمز پویا یا اطلاعات ورود بانکی را برای هیچ‌کس نفرست.",
+        "<i>MASIH GUARD • Subscription Center</i>",
+    ])
+    return "\n".join(lines)
 
 
 def public_wallet(uid):
