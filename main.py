@@ -31,7 +31,7 @@ BOT_ID = 0
 
 DEFAULT_GROUP = {
     "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True,
-    "anti_forward": False, "media_lock": False, "welcome_on": True,
+    "anti_forward": False, "media_lock": False, "lock_mentions": False, "lock_hashtags": False, "lock_usernames": False, "welcome_on": True,
     "farewell_on": False, "join_approval": False, "bad_words": [], "whitelist": [],
     "warn_limit": 3, "lock_photos": False, "lock_videos": False, "lock_files": False,
     "lock_stickers": False, "lock_voice": False, "lock_video_notes": False,
@@ -258,7 +258,7 @@ SECTIONS = {
     "tickets":"🎫 تیکت پشتیبانی", "ai":"🧠 هوش مصنوعی",
     "backup":"💾 پشتیبان‌گیری", "daily":"📅 گزارش روزانه",
     "smart":"🧩 امنیت هوشمند", "status":"🚀 وضعیت ربات",
-    "bot_settings":"🎛️ تنظیمات عمومی ربات", "licenses":"🛡️ مجوز نصب گروه‌ها"
+    "bot_settings":"🎛️ تنظیمات عمومی ربات", "licenses":"🛡️ مجوز نصب گروه‌ها", "full_control":"🎛️ کنترل کامل ربات"
 }
 
 PUBLIC_FEATURES = (
@@ -335,7 +335,23 @@ def section_keyboard(section):
       "smart":[("🧩 روشن/خاموش امنیت هوشمند","toggle:smart_security")],
       "status":[("🚀 وضعیت ربات","show:status")],
       "licenses":[("➕ فعال‌سازی مجوز گروه","ask:activate_group"),("🗓 تمدید مجوز گروه","ask:extend_group"),("⛔ لغو مجوز گروه","ask:revoke_group"),("📋 فهرست گروه‌های مجاز","show:group_licenses"),("📨 درخواست‌های نصب","show:group_requests")],
+      "full_control":[
+        ("🔗 قفل لینک","toggle:anti_link"),("📢 قفل تبلیغات","toggle:anti_ads"),
+        ("🚫 قفل اسپم","toggle:anti_spam"),("🔁 قفل پیام تکراری","toggle:anti_repeat"),
+        ("↪️ قفل فوروارد","toggle:anti_forward"),("🖼 قفل همه رسانه‌ها","toggle:media_lock"),
+        ("🏷 قفل تگ/منشن","toggle:lock_mentions"),("#️⃣ قفل هشتگ","toggle:lock_hashtags"),
+        ("👤 قفل نام‌کاربری (@)","toggle:lock_usernames"),
+        ("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),
+        ("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر/گیف","toggle:lock_stickers"),
+        ("🎙 قفل ویس","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),
+        ("📵 فیلتر شماره تماس","toggle:phone_filter"),("🧠 امنیت هوشمند گروه","toggle:group_smart_security"),
+        ("👋 خوشامدگویی","toggle:welcome_on"),("🌙 خداحافظی","toggle:farewell_on"),
+        ("🛂 تأیید ورود","toggle:join_approval"),("🌙 تنظیم ساعت سکوت","ask:quiet_hours"),
+        ("⚙️ سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules"),
+        ("🆔 نمایش تنظیمات یک گروه","ask:group_settings")
+      ],
       "bot_settings":[
+        ("🎛️ کنترل کامل ربات (همه تنظیمات)","panel:full_control"),
         ("📝 متن معرفی /start","ask:public_features"),
         ("📢 تغییر لینک کانال","ask:channel_url"),
         ("🌐 تغییر لینک وب‌سایت","ask:website_url"),
@@ -809,6 +825,9 @@ def process_group_security(message):
     elif s.get("lock_stickers") and (getattr(message,"sticker",None) or getattr(message,"animation",None)): reason="ارسال استیکر یا گیف در حالت قفل"
     elif s.get("lock_voice") and (getattr(message,"voice",None) or getattr(message,"audio",None)): reason="ارسال پیام صوتی در حالت قفل"
     elif s.get("lock_video_notes") and getattr(message,"video_note",None): reason="ارسال ویدئوی گرد در حالت قفل"
+    elif s.get("lock_mentions") and (re.search(r"(?<!\w)@[A-Za-z0-9_]{3,}", text or "") or any(getattr(e, "type", "") in ("mention", "text_mention") for e in (getattr(message, "entities", None) or []))): reason="ارسال تگ یا منشن در حالت قفل"
+    elif s.get("lock_hashtags") and (re.search(r"(?<!\w)#[\w\u0600-\u06ff]+", text or "") or any(getattr(e, "type", "") == "hashtag" for e in (getattr(message, "entities", None) or []))): reason="ارسال هشتگ در حالت قفل"
+    elif s.get("lock_usernames") and re.search(r"(?<!\w)@[A-Za-z0-9_]{5,}", text or ""): reason="ارسال نام کاربری در حالت قفل"
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
     elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
@@ -932,7 +951,7 @@ def _handle_group_shortcut(message, text):
         setting_action = command[4:]
         enabled = setting_action.endswith("_on")
         setting = setting_action[:-3] if enabled else setting_action[:-4]
-        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "welcome_on", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"}
+        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "welcome_on", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "lock_mentions", "lock_hashtags", "lock_usernames", "phone_filter"}
         if setting not in allowed_settings:
             bot.reply_to(message, "⚠️ این تنظیم شناخته نشد.")
             return True
@@ -1020,6 +1039,16 @@ def handle_ai_group_management(message, text=None):
         (("ضداسپم", "قفلاسپم"), "anti_spam"),
         (("ضدتکرار", "قفلپیامتکراری"), "anti_repeat"),
         (("قفلرسانه", "قفرسانه"), "media_lock"),
+        (("قفلعکس", "قفلتصویر"), "lock_photos"),
+        (("قفلفیلم", "قفلویدیو", "قفلکلیپ"), "lock_videos"),
+        (("قفلفایل", "قفلمدرک"), "lock_files"),
+        (("قفلاستیکر", "قفلگیف"), "lock_stickers"),
+        (("قفلویس", "قفلصوت", "قفلپیامصوتی"), "lock_voice"),
+        (("قفلپیامگرد", "قفلیدئویگرد"), "lock_video_notes"),
+        (("فیلترشماره", "قفلشمارهتماس"), "phone_filter"),
+        (("قفلتگ", "قفلمنشن", "قفلمنشنها"), "lock_mentions"),
+        (("قفلهاشتگ", "قفلهشتگها"), "lock_hashtags"),
+        (("قفلنامکاربری", "قفلآیدی", "قفل یوزرنیم"), "lock_usernames"),
         (("خوشامدگویی", "خوشامد"), "welcome_on"),
         (("خداحافظی",), "farewell_on"),
     ]
@@ -1043,7 +1072,7 @@ def handle_ai_group_management(message, text=None):
         bot.reply_to(message, "⛔ برای تغییر تنظیمات امنیتی باید مدیر همین گروه باشی.")
         return True
     enabled = bool(is_on and not is_off)
-    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock"}:
+    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}:
         try:
             me = bot.get_me()
             member = bot.get_chat_member(chat_id, me.id)
@@ -1060,7 +1089,11 @@ def handle_ai_group_management(message, text=None):
     label = {
         "anti_link": "ضدلینک", "anti_ads": "ضدتبلیغ", "anti_spam": "ضداسپم",
         "anti_repeat": "ضدتکرار", "media_lock": "قفل رسانه",
-        "welcome_on": "خوشامدگویی", "farewell_on": "خداحافظی"
+        "welcome_on": "خوشامدگویی", "farewell_on": "خداحافظی",
+        "lock_photos": "قفل عکس", "lock_videos": "قفل فیلم", "lock_files": "قفل فایل",
+        "lock_stickers": "قفل استیکر/گیف", "lock_voice": "قفل ویس", "lock_video_notes": "قفل ویدئوی گرد",
+        "phone_filter": "فیلتر شماره تماس", "lock_mentions": "قفل تگ/منشن",
+        "lock_hashtags": "قفل هشتگ", "lock_usernames": "قفل نام‌کاربری"
     }.get(target_setting, target_setting)
     bot.reply_to(message, f"✅ {label} {'روشن' if enabled else 'خاموش'} شد.")
     return True
@@ -1131,7 +1164,13 @@ def group_message_handler(message):
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
             return
-        # AI in groups is activated only by replying to a message sent by this bot.
+        if normalized_text in {"ربات", "دستیار", "هوش", "هوش مصنوعی"}:
+            bot.reply_to(message, "جانم! 🌹 برای سؤال، بنویس «ربات سؤال تو» یا «هوش سؤال تو». برای تغییر تنظیمات، دستور را روشن و واضح بنویس؛ مثلاً «قفل لینک روشن کن». ")
+            return
+        # Allow supported Persian group-management commands without requiring a reply to the bot.
+        if text and handle_ai_group_management(message, text.strip()):
+            return
+        # AI can be activated by replying to the bot or by starting with «هوش»، «ربات» or «دستیار».
         global BOT_USERNAME, BOT_ID
         try:
             if not BOT_ID or not BOT_USERNAME:
@@ -1145,11 +1184,19 @@ def group_message_handler(message):
         reply_to_bot = bool(replied and getattr(getattr(replied, "from_user", None), "is_bot", False)
                             and (getattr(getattr(replied, "from_user", None), "id", None) == bot_id
                                  or (BOT_USERNAME and (getattr(getattr(replied, "from_user", None), "username", "") or "").casefold() == BOT_USERNAME)))
-        if reply_to_bot and text and text.strip() and not text.strip().startswith("/"):
-            if handle_ai_group_management(message, text.strip()):
-                return
+        ai_question = ""
+        if text and text.strip() and not text.strip().startswith("/"):
+            if reply_to_bot:
+                ai_question = text.strip()
+            else:
+                normalized_ai = text.strip().casefold().replace("ي", "ی").replace("ك", "ک")
+                for prefix in ("از ربات بپرس ", "دستیار ", "ربات ", "هوش "):
+                    if normalized_ai.startswith(prefix):
+                        ai_question = text.strip()[len(prefix):].strip()
+                        break
+        if ai_question:
             status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
-            answer = ask_ai(text.strip())
+            answer = ask_ai(ai_question)
             try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
             except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
             return
@@ -1811,25 +1858,40 @@ def private_text_handler(message):
     uid=message.from_user.id; text=(message.text or "").strip()
     ensure_user(uid,message.from_user.username,message.from_user.first_name)
     if text.startswith("/"): return
-    # AI trigger requested by the owner: only «هوش» or a reply to the bot activates it.
     normalized_private = text.replace("ي", "ی").replace("ك", "ک").strip().casefold()
-    if normalized_private == "هوش":
-        bot.reply_to(message, "جانم، بگو ببینم؟")
-        return
-    if normalized_private.startswith("هوش "):
-        question = text.strip()[len("هوش "):].strip()
-        if not question:
-            bot.reply_to(message, "جانم، بگو ببینم؟")
+    # Recognize panel commands in private chat too; previously they were silently ignored.
+    if normalized_private in {"پنل", "پنل مدیریت", "پنل مالک", "مدیریت"}:
+        if is_owner(uid):
+            bot.send_message(uid, "🔐 پنل خصوصی مالک باز شد.")
+            send_panel(uid, user_id=uid)
         else:
-            status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
-            answer = ask_ai(question)
-            try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
-            except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
+            bot.send_message(uid, "⛔ پنل مدیریت فقط برای مالک ربات است.")
         return
+    if normalized_private in {"ربات", "دستیار", "هوش", "هوش مصنوعی"}:
+        bot.send_message(
+            uid,
+            "سلام! من دستیار MASIH GUARD هستم. 🌹\n\n"
+            "• برای پرسش هوش مصنوعی بنویس: «هوش سؤال تو» یا «ربات سؤال تو»\n"
+            "• برای بازکردن پنل مالک بنویس: «پنل»\n"
+            "• برای دیدن امکانات بنویس: «راهنما»",
+            reply_markup=owner_start_keyboard() if is_owner(uid) else public_keyboard()
+        )
+        return
+    if normalized_private in {"سلام", "سلام ربات", "درود", "راهنما", "امکانات", "شروع", "help", "hi", "hello"}:
+        bot.send_message(uid, start_welcome_text(message.from_user),
+                         reply_markup=owner_start_keyboard() if is_owner(uid) else public_keyboard())
+        return
+    question = ""
+    for prefix in ("از ربات بپرس ", "دستیار ", "ربات ", "هوش "):
+        if normalized_private.startswith(prefix):
+            question = text[len(prefix):].strip()
+            break
     replied = getattr(message, "reply_to_message", None)
-    if replied and getattr(getattr(replied, "from_user", None), "is_bot", False) and text and not text.startswith("/"):
+    if not question and replied and getattr(getattr(replied, "from_user", None), "is_bot", False) and text and not text.startswith("/"):
+        question = text
+    if question:
         status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
-        answer = ask_ai(text)
+        answer = ask_ai(question)
         try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
         except Exception: bot.send_message(uid, esc(answer[:3900]), reply_to_message_id=message.message_id)
         return
@@ -1936,7 +1998,7 @@ def private_text_handler(message):
             if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
             cfg=get_group_settings(target)
             lines=[f"🆔 شناسه گروه: <code>{target}</code>",f"🛡 مجوز نصب: {'فعال' if is_group_licensed(target) else 'غیرفعال'}"]
-            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
+            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
             for key,label in labels.items(): lines.append(f"{label}: {'روشن' if cfg.get(key,False) else 'خاموش'}")
             lines.append(f"قوانین: {esc(cfg.get('rules',''))[:500]}")
             bot.send_message(uid,"⚙️ <b>شناسه و تنظیمات گروه</b>\n"+"\n".join(lines))
@@ -1992,7 +2054,7 @@ def private_text_handler(message):
             setting=pending.get("setting",""); s=get_group_settings(target)
             if not isinstance(s.get(setting),bool): raise ValueError("این تنظیم قابل تغییر نیست.")
             s[setting]=not s[setting]; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
-            label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
+            label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
             bot.send_message(uid,f"✅ {label} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
         elif action in ("activate_group", "extend_group", "revoke_group"):
             if action == "activate_group":
