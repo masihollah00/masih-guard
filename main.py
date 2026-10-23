@@ -878,6 +878,106 @@ _GROUP_ALIASES = {
     "قفل استیکر": "set_lock_stickers_on", "بازکردن استیکر": "set_lock_stickers_off",
     "قفل ویس": "set_lock_voice_on", "بازکردن ویس": "set_lock_voice_off",
     "قفل ویدئوی گرد": "set_lock_video_notes_on", "بازکردن ویدئوی گرد": "set_lock_video_notes_off",
+    'دستورات کامل': 'help_full',
+    'فهرست دستورات': 'help_full',
+    'لیست دستورات': 'help_full',
+    'همه دستورات': 'help_full',
+    'راهنمای کامل': 'help_full',
+    'شناسه من': 'id',
+    'آیدی من': 'id',
+    'آیدی گروه': 'id',
+    'شناسه گروه': 'id',
+    'شناسه عضو': 'id',
+    'وضعیت ربات': 'ping',
+    'ربات فعاله': 'ping',
+    'تست ربات': 'ping',
+    'پینگ ربات': 'ping',
+    'بررسی ربات': 'ping',
+    'قانون گروه': 'rules',
+    'قوانین گروه': 'rules',
+    'دیدن قوانین': 'rules',
+    'نمایش قوانین': 'rules',
+    'قانون ها': 'rules',
+    'آمار گروه': 'gstats',
+    'گزارش آمار': 'gstats',
+    'آمار اعضا': 'gstats',
+    'آمار پیام\u200cها': 'gstats',
+    'آمار پیامها': 'gstats',
+    'هوش بپرس': 'ai',
+    'از هوش بپرس': 'ai',
+    'سوال هوش': 'ai',
+    'سؤال هوش': 'ai',
+    'دستیار هوشمند': 'ai',
+    'کاربر بن': 'ban',
+    'بن کاربر': 'ban',
+    'مسدود کاربر': 'ban',
+    'مسدودسازی کاربر': 'ban',
+    'اخراجی بن': 'ban',
+    'رفع مسدودیت': 'unban',
+    'لغو بن': 'unban',
+    'آزادسازی کاربر': 'unban',
+    'رفع بلاک': 'unban',
+    'آزاد کردن': 'unban',
+    'سکوت کاربر': 'mute',
+    'ساکت کن': 'mute',
+    'بیصدا کن': 'mute',
+    'محدود کن': 'mute',
+    'محدودسازی': 'mute',
+    'آزاد سکوت': 'unmute',
+    'سکوت بردار': 'unmute',
+    'رفع محدودیت': 'unmute',
+    'بازکردن سکوت': 'unmute',
+    'کاربر آزاد': 'unmute',
+    'بیرون کن': 'kick',
+    'حذف عضو': 'kick',
+    'اخراج عضو': 'kick',
+    'بنداز بیرون': 'kick',
+    'خارج کن': 'kick',
+    'اخطار کاربر': 'warn',
+    'هشدار کاربر': 'warn',
+    'ثبت اخطار': 'warn',
+    'اخطار عضو': 'warn',
+    'هشدار بده': 'warn',
+    'سنجاق پیام': 'pin',
+    'پیام سنجاق': 'pin',
+    'پین پیام': 'pin',
+    'ثابت کن': 'pin',
+    'پین کن': 'pin',
+    'لغو پین': 'unpin',
+    'بازکردن سنجاق': 'unpin',
+    'حذف سنجاق': 'unpin',
+    'برداشتن پین': 'unpin',
+    'لغو سنجاق': 'unpin',
+    'پاک کردن': 'delete',
+    'حذف پیام': 'delete',
+    'پاک پیام': 'delete',
+    'پاکش کن': 'delete',
+    'پیام حذف': 'delete',
+    'پاکسازی گروه': 'clean',
+    'پاکسازی چت': 'clean',
+    'تمیزکاری گروه': 'clean',
+    'پاک کردن پیامها': 'clean',
+    'حذف پیامها': 'clean',
+    'گزارش بده': 'report',
+    'گزارش تخلف': 'report',
+    'ثبت گزارش': 'report',
+    'گزارش عضو': 'report',
+    'ارسال گزارش': 'report',
+    'ضد لینک': 'set_anti_link_on',
+    'لینک ممنوع': 'set_anti_link_on',
+    'قفل لینک روشن': 'set_anti_link_on',
+    'ضدلینک فعال': 'set_anti_link_on',
+    'لینک باز': 'set_anti_link_off',
+    'ضد تبلیغ': 'set_anti_ads_on',
+    'تبلیغ ممنوع': 'set_anti_ads_on',
+    'قفل تبلیغ روشن': 'set_anti_ads_on',
+    'ضدتبلیغ فعال': 'set_anti_ads_on',
+    'تبلیغ آزاد': 'set_anti_ads_off',
+    'تغییر نام گروه': 'set_title',
+    'اسم گروه به': 'set_title',
+    'نام گروه به': 'set_title',
+    'تغییر توضیحات گروه': 'set_description',
+    'توضیحات گروه به': 'set_description',
 }
 
 def _normalize_group_command(text):
@@ -929,8 +1029,18 @@ def _handle_group_shortcut(message, text):
         try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
         except Exception: bot.send_message(chat_id, esc(answer[:3900]), reply_to_message_id=message.message_id)
         return True
+    if command == "help_full":
+        phrases = sorted(_GROUP_ALIASES.keys())
+        text_out = "📚 <b>فهرست عبارت‌های پشتیبانی‌شده</b>\n" + "، ".join(phrases)
+        chunks = [text_out[i:i+3500] for i in range(0, len(text_out), 3500)]
+        for index, chunk in enumerate(chunks):
+            if index == 0:
+                bot.reply_to(message, chunk)
+            else:
+                bot.send_message(chat_id, chunk)
+        return True
     if command == "help":
-        bot.reply_to(message, "📚 <b>دستورات عمومی:</b> پینگ، آیدی، قوانین، آمار، هوش، راهنما\n<b>مدیریت (با ریپلای روی پیام عضو):</b> بن، رفع بن، سیک/سکوت، رفع سکوت، اخراج، اخطار، سنجاق، لغو سنجاق، حذف، پاکسازی، گزارش\nفرمان‌های مدیریتی فقط برای مدیران گروه فعال‌اند.")
+        bot.reply_to(message, "📚 <b>دستورات عمومی:</b> پینگ، آیدی، قوانین، آمار، هوش، راهنما\n<b>مدیریت (با ریپلای روی پیام عضو):</b> بن، رفع بن، سکوت، رفع سکوت، اخراج، اخطار، سنجاق، لغو سنجاق، حذف، پاکسازی، گزارش\n<b>تنظیمات:</b> ضدلینک، ضدتبلیغ، ضداسپم، ضدتکرار، قفل رسانه و انواع رسانه\n<b>اطلاعات گروه:</b> تغییر اسم و توضیحات با نوشتن متن جدید\nبرای فهرست کامل عبارت‌ها بنویس: «دستورات کامل»\nفرمان‌های مدیریتی فقط با مجوز مدیر گروه اجرا می‌شوند.")
         return True
     if command == "id":
         target = _reply_target(message) or uid
@@ -1029,6 +1139,73 @@ def _handle_group_shortcut(message, text):
         bot.reply_to(message, "⚠️ انجام دستور ناموفق بود؛ دسترسی ادمین ربات و مجوزهای گروه را بررسی کن.")
     return True
 
+
+
+def handle_group_info_request(message, text=None):
+    """Change group title/description after checking requester and bot permissions."""
+    raw = re.sub(r"[\u200c\s]+", " ", (text or "").strip()).replace("ي", "ی").replace("ك", "ک")
+    if not raw:
+        return False
+    low = raw.casefold()
+    is_description = bool(re.search(r"توضیح(?:ات)?\s*گروه|گروه.{0,12}توضیح", low))
+    is_title = bool(re.search(r"(?:اسم|نام|عنوان)\s*گروه|گروه.{0,12}(?:اسم|نام|عنوان)", low))
+    if not is_description and not is_title:
+        return False
+    target = ""
+    if is_description:
+        patterns = [
+            r"(?:توضیح(?:ات)?)\s*گروه\s*(?:(?:را|رو)\s*)?(?:عوض\s*کن|تغییر\s*بده)\s*به\s+(.+)$",
+            r"(?:توضیح(?:ات)?)\s*گروه\s*(?:(?:را|رو)\s*)?به\s+(.+)$",
+            r"گروه\s*(?:(?:را|رو)\s*)?توضیح(?:ات)?\s*به\s+(.+)$",
+        ]
+    else:
+        patterns = [
+            r"(?:اسم|نام|عنوان)\s*گروه\s*(?:(?:را|رو)\s*)?(?:عوض\s*کن|تغییر\s*(?:نام\s*)?بده)\s*به\s+(.+)$",
+            r"(?:اسم|نام|عنوان)\s*گروه\s*(?:(?:را|رو)\s*)?به\s+(.+)$",
+            r"گروه\s*(?:(?:را|رو)\s*)?به\s+(.+)$",
+            r"(?:اسم|نام|عنوان)\s*گروه\s*(?:(?:را|رو)\s*)?(?:بذار|بگذار|بکن|کن)\s+(.+)$",
+        ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            target = match.group(1).strip().strip("«»\\\"' ")
+            target = re.sub(r"\s+(?:تغییر\s*(?:بده|ده)|عوض\s*کن|تغییر\s*نام\s*(?:بده|ده))$", "", target).strip()
+            break
+    if not target or target.casefold() in {"عوض کن", "تغییر بده", "تغییر نام بده", "بکن", "بذار"}:
+        example = "توضیحات گروه رو به متن جدید تغییر بده" if is_description else "اسم گروه رو به نام جدید تغییر بده"
+        bot.reply_to(message, f"✍️ {('متن توضیحات' if is_description else 'اسم جدید')} رو هم بنویس.\nمثال: «{example}»")
+        return True
+    max_length = 255 if is_description else 128
+    if len(target) > max_length:
+        bot.reply_to(message, f"⚠️ {'توضیحات' if is_description else 'اسم گروه'} حداکثر {max_length} نویسه می‌تواند باشد.")
+        return True
+    chat_id = message.chat.id
+    user_id = getattr(getattr(message, "from_user", None), "id", 0)
+    try:
+        requester = bot.get_chat_member(chat_id, user_id)
+        requester_status = getattr(requester, "status", "")
+        if requester_status not in ("administrator", "creator") or (requester_status != "creator" and not getattr(requester, "can_change_info", False)):
+            bot.reply_to(message, "⛔ برای تغییر نام یا توضیحات، باید مدیر گروه با مجوز «تغییر اطلاعات گروه» باشی.")
+            return True
+        me = bot.get_me()
+        bot_member = bot.get_chat_member(chat_id, me.id)
+        bot_status = getattr(bot_member, "status", "")
+        if bot_status not in ("administrator", "creator") or (bot_status != "creator" and not getattr(bot_member, "can_change_info", False)):
+            bot.reply_to(message, "⚠️ ربات باید مدیر گروه باشد و مجوز «تغییر اطلاعات گروه» داشته باشد.")
+            return True
+        if is_description:
+            bot.set_chat_description(chat_id, target)
+        else:
+            bot.set_chat_title(chat_id, target)
+        add_log("group_info_changed", chat_id, user_id, ("description=" if is_description else "title=") + target[:120])
+        save_data()
+        bot.reply_to(message, f"✅ {'توضیحات' if is_description else 'نام'} گروه تغییر کرد.")
+    except Exception as e:
+        print("Group info change error:", repr(e))
+        bot.reply_to(message, "⚠️ تغییر انجام نشد. مجوز «تغییر اطلاعات گروه» ربات و مدیر درخواست‌دهنده را بررسی کن.")
+    return True
+
+
 def handle_ai_group_management(message, text=None):
     """Execute a small, explicit set of safe group-setting requests from AI replies."""
     normalized = (text or "").casefold().replace("ي", "ی").replace("ك", "ک")
@@ -1072,7 +1249,7 @@ def handle_ai_group_management(message, text=None):
         bot.reply_to(message, "⛔ برای تغییر تنظیمات امنیتی باید مدیر همین گروه باشی.")
         return True
     enabled = bool(is_on and not is_off)
-    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}:
+    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}:
         try:
             me = bot.get_me()
             member = bot.get_chat_member(chat_id, me.id)
@@ -1163,6 +1340,8 @@ def group_message_handler(message):
                 req[key] = time.time(); save_data()
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
+            return
+        if text and handle_group_info_request(message, text):
             return
         if normalized_text in {"ربات", "دستیار", "هوش", "هوش مصنوعی"}:
             bot.reply_to(message, "جانم! 🌹 برای سؤال، بنویس «ربات سؤال تو» یا «هوش سؤال تو». برای تغییر تنظیمات، دستور را روشن و واضح بنویس؛ مثلاً «قفل لینک روشن کن». ")
