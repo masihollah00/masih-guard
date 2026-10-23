@@ -1,7 +1,7 @@
 
 # -*- coding: utf-8 -*-
 """MASIH GUARD S1000+ — single-file Telegram group management bot."""
-import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket
+import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, date
@@ -26,10 +26,13 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=4)
 LOCK = threading.RLock()
+GROUP_ADMIN_CACHE = {}  # (chat_id, user_id) -> (monotonic expiry, bool)
+GROUP_ADMIN_CACHE_TTL = 15
 WAITING, GAMES, PANEL_CURRENT, PANEL_HISTORY = {}, {}, {}, {}
 GAME_CYCLES = {}
 BOT_USERNAME = ""
 BOT_ID = 0
+STARTED_AT = time.time()
 
 DEFAULT_GROUP = {
     "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True, "anti_raid_on": False, "raid_mode_until": 0,
@@ -66,11 +69,26 @@ def now_text(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 def today(): return date.today().isoformat()
 
 def load_data():
+    """Load persistent data; preserve a damaged file for manual recovery instead of overwriting it."""
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict): raise ValueError("Invalid data")
-    except (OSError, ValueError, TypeError):
+        if not isinstance(data, dict):
+            raise ValueError("The root of the data file must be a JSON object")
+    except FileNotFoundError:
+        data = clone(DEFAULT_DATA)
+    except (OSError, ValueError, TypeError) as load_error:
+        # Never silently discard a broken JSON file: preserve a timestamped copy first.
+        try:
+            if os.path.isfile(DATA_FILE) and os.path.getsize(DATA_FILE) <= 25 * 1024 * 1024:
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                corrupt_copy = f"{DATA_FILE}.corrupt-{stamp}.bak"
+                shutil.copy2(DATA_FILE, corrupt_copy)
+                print(f"WARNING: invalid data file preserved as {corrupt_copy}: {load_error!r}")
+            else:
+                print(f"WARNING: could not preserve invalid data file: {load_error!r}")
+        except Exception as backup_error:
+            print("WARNING: failed to preserve invalid data file:", repr(backup_error))
         data = clone(DEFAULT_DATA)
     for k, v in DEFAULT_DATA.items():
         if k not in data: data[k] = clone(v)
@@ -110,13 +128,24 @@ def load_data():
 DATA = load_data()
 
 def save_data():
+    """Atomically persist bot state so interrupted writes do not truncate the main JSON file."""
     with LOCK:
+        parent = os.path.dirname(os.path.abspath(DATA_FILE))
+        os.makedirs(parent, exist_ok=True)
         tmp = DATA_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(DATA, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, DATA_FILE)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(DATA, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, DATA_FILE)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 def add_log(action, chat_id="", user_id="", detail=""):
     with LOCK:
@@ -198,39 +227,77 @@ def group_install_message(chat_id, title="این گروه"):
             "📩 برای بررسی و فعال‌سازی، با پشتیبان ربات ارتباط بگیرید.")
 
 def bot_settings():
-    """Return current Toman settings; legacy diamond settings are removed."""
+    """Return normalized Toman settings without overwriting valid owner configuration."""
     settings = DATA.setdefault("bot_settings", clone(DEFAULT_DATA["bot_settings"]))
-    settings.pop("daily_reward", None); settings.pop("luck_max", None)
-    settings.pop("referral_reward", None); settings.pop("shop_packages", None)
+    # Remove retired economy keys, but preserve valid current Toman settings.
+    for retired_key in ("daily_reward", "luck_max", "referral_reward", "shop_packages"):
+        settings.pop(retired_key, None)
+    for key, value in DEFAULT_DATA["bot_settings"].items():
+        settings.setdefault(key, clone(value))
     settings.setdefault("referral_reward_toman", 5000)
-    settings["subscription_packages"] = [[30, 40000], [60, 80000], [90, 120000]]
-    for key, value in DEFAULT_DATA["bot_settings"].items(): settings.setdefault(key, clone(value))
+    # Validate packages defensively. The previous implementation reset this list on
+    # every call, silently discarding any customized packages from persistent data.
+    packages = settings.get("subscription_packages")
+    normalized_packages = []
+    if isinstance(packages, list):
+        for row in packages[:20]:
+            if not isinstance(row, (list, tuple)) or len(row) != 2:
+                continue
+            try:
+                days, price = int(row[0]), int(row[1])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if 1 <= days <= 3650 and 0 <= price <= 2_000_000_000:
+                pair = [days, price]
+                if pair not in normalized_packages:
+                    normalized_packages.append(pair)
+    if not normalized_packages:
+        normalized_packages = clone(DEFAULT_DATA["bot_settings"]["subscription_packages"])
+    settings["subscription_packages"] = normalized_packages
+    try:
+        reward = int(settings.get("referral_reward_toman", 5000))
+    except (TypeError, ValueError, OverflowError):
+        reward = 5000
+    settings["referral_reward_toman"] = min(100_000_000, max(0, reward))
     return settings
 
 def start_welcome_text(user):
-    """Persian /start greeting with a clickable Telegram user mention."""
+    """Customer-facing Persian welcome and feature catalogue for /start."""
     raw_name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x).strip() or "دوست عزیز"
     mention = f'<a href="tg://user?id={int(user.id)}">{esc(raw_name)}</a>'
-    default_text = (
-        f"🛡️ سلام {mention} 🌹\n\n"
-        "به <b>MASIH GUARD S1000+</b> خوش اومدی.\n"
-        "ربات برای مدیریت و ایمن‌سازی گروه‌های تلگرام طراحی شده است.\n\n"
-        "🔐 امکانات موجود شامل کنترل لینک و تبلیغات، ضداسپم، مدیریت اعضا، "
-        "قوانین، خوشامدگویی، گزارش‌ها و ابزارهای کمکی است؛ عملکرد هر قابلیت "
-        "به مجوزهای ربات و تنظیمات گروه بستگی دارد.\n\n"
-        "🧠 دستیار هوش مصنوعی از بخش مربوطه در دسترس است؛ برای پاسخ‌گویی باید "
-        "کلید سرویس هوش مصنوعی روی هاست تنظیم شده باشد.\n\n"
-        "👇 از دکمه‌های زیر برای شروع استفاده کن.\n"
-        "📌 تنظیمات مدیریتی فقط برای مالک مجاز است."
-    )
     custom = str(bot_settings().get("public_features", "") or "").strip()
     if custom:
         marker = "__MASIH_CLICKABLE_USER_MENTION__"
         safe_custom = esc(custom.replace("{name}", marker)).replace(marker, mention)
-        return safe_custom
-    return default_text
-
-
+        return safe_custom + "\n\n" + PUBLIC_FEATURES + "\n\n📚 برای فهرست فرمان‌ها /help را بزن."
+    return (
+        f"🌌 <b>سلام {mention}؛ به دنیای امنیت هوشمند خوش اومدی!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🛡️ <b>MASIH GUARD S1000+</b>\n"
+        "<i>دستیار مدیریت، امنیت و ابزارهای کاربردی تلگرام</i>\n\n"
+        "🚀 <b>امکانات اصلی</b>\n"
+        "🔐 <b>امنیت گروه:</b> کنترل لینک و تبلیغات، ضداسپم و تکرار، کنترل فوروارد و رسانه، فیلتر شماره تماس، کلمات ممنوع، کپچا و ابزارهای امنیت هوشمند.\n"
+        "👥 <b>مدیریت اعضا:</b> اخطار، سکوت و رفع سکوت، مسدودسازی و آزادسازی، اخراج، گزارش تخلف، سنجاق و پاک‌سازی پیام‌ها با فرمان مجاز.\n"
+        "👋 <b>مدیریت ورود و خروج:</b> خوشامدگویی، خداحافظی، تنظیم متن و تصویر خوشامد، تأیید ورود و کنترل ضدیورش.\n"
+        "⚙️ <b>ابزارهای گروه:</b> قوانین، پاسخ خودکار، فرمان اختصاصی، یادداشت‌ها، اطلاعیه، آمار و گزارش فعالیت.\n"
+        "🧠 <b>دستیار هوشمند:</b> راهنمایی دربارهٔ امکانات و درخواست‌های پشتیبانی‌شده؛ اجرای تغییرات گروه فقط پس از بررسی دسترسی مدیر انجام می‌شود.\n"
+        "🎨 <b>ابزارهای جانبی:</b> تبدیل متن به سبک‌های فونت، فهرست پروکسی‌های ذخیره‌شده، تیکت پشتیبانی و بازی‌های سرگرمی.\n"
+        "🎮 <b>سرگرمی:</b> بازی متنی، بازی‌های مرورگری و جدول امتیازها.\n"
+        "💳 <b>حساب کاربری:</b> کیف پول تومانی، تاریخچهٔ تراکنش، دعوت دوستان، درخواست برداشت و بسته‌های اشتراک.\n\n"
+        "📚 <b>شروع سریع</b>\n"
+        "• <code>/help</code> — فهرست فرمان‌ها\n"
+        "• <code>/profile</code> — پروفایل و موجودی\n"
+        "• <code>/top</code> — جدول امتیازها\n"
+        "• <code>/game</code> یا «بازی» — بازی‌ها\n"
+        "• <code>/ai متن سؤال</code> — پرسش از دستیار\n"
+        "• <code>/ping</code> — بررسی پاسخ‌گویی ربات\n"
+        "• <code>/id</code> — شناسهٔ کاربر و گفتگو\n"
+        "• در گروه، «پنل» یا «راهنما» — پنل و راهنمای همان گروه\n\n"
+        "👥 <b>دعوت دوستان:</b> از بخش «زیرمجموعه‌گیری» لینک اختصاصی بگیر؛ پاداش فقط طبق شرایط و تنظیمات فعلی ربات ثبت می‌شود.\n\n"
+        "🔒 <b>شفاف و امن:</b> امکانات گروه به مجوز نصب، دسترسی ادمین ربات و مجوزهای تلگرام وابسته‌اند. تغییرات مدیریتی فقط برای مدیران مجاز همان گروه در دسترس است. قابلیت‌های وابسته به سرویس بیرونی، مانند هوش مصنوعی یا بازی وب، تنها در صورت تنظیم بودن سرویس فعال می‌شوند.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 از منوی شیک زیر، بخش موردنظرت رو انتخاب کن."
+    )
 
 
 def group_start_guide(chat_title="گروه"):
@@ -253,10 +320,70 @@ def configured_url(key, fallback):
     value = str(bot_settings().get(key, "") or fallback).strip()
     return value if value.startswith(("https://", "http://")) else fallback
 
+
+def get_game_url():
+    """Resolve the browser-game URL across common hosts; return empty unless HTTPS is configured."""
+    explicit = (os.getenv("WEB_GAME_URL") or "").strip().rstrip("/")
+    if explicit:
+        candidate = explicit if explicit.lower().endswith("/game") else explicit + "/game"
+        return candidate if candidate.startswith("https://") else ""
+    base = (os.getenv("PUBLIC_BASE_URL") or os.getenv("SERVICE_URL") or
+            os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    if not base:
+        # Some hosts expose a bare public domain rather than a fully-qualified URL.
+        bare_domain = (os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("KOYEB_PUBLIC_DOMAIN") or "").strip().strip("/")
+        if bare_domain:
+            base = bare_domain if "://" in bare_domain else "https://" + bare_domain
+    if base.startswith("https://"):
+        return base + "/game"
+    return ""
+
+def group_admin_status(chat_id, user_id):
+    """Return True/False for a confirmed role, or None if Telegram lookup failed.
+
+    A short cache avoids one Telegram API request for every group message. The
+    unknown state is kept separate so security filters do not punish an admin
+    merely because Telegram is temporarily unreachable.
+    """
+    if not user_id:
+        return False
+    key = (int(chat_id), int(user_id))
+    now = time.monotonic()
+    cached = GROUP_ADMIN_CACHE.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
+    try:
+        member = bot.get_chat_member(key[0], key[1])
+        result = getattr(member, "status", "") in ("administrator", "creator")
+        GROUP_ADMIN_CACHE[key] = (now + GROUP_ADMIN_CACHE_TTL, result)
+        if len(GROUP_ADMIN_CACHE) > 10000:
+            for cache_key, (expiry, _) in list(GROUP_ADMIN_CACHE.items()):
+                if expiry <= now:
+                    GROUP_ADMIN_CACHE.pop(cache_key, None)
+            if len(GROUP_ADMIN_CACHE) > 12000:
+                GROUP_ADMIN_CACHE.clear()
+        return result
+    except Exception:
+        # Do not cache failures: permissions may become available on the next check.
+        return None
+
 def is_group_admin(chat_id, user_id):
-    if is_owner(user_id): return True
-    try: return bot.get_chat_member(chat_id, user_id).status in ("administrator", "creator")
-    except Exception: return False
+    """Require confirmed Telegram admin/creator status in this exact group."""
+    return group_admin_status(chat_id, user_id) is True
+
+def bot_has_group_permission(chat_id, permission):
+    """Check the bot's current Telegram permission before enabling dependent features."""
+    try:
+        me = bot.get_me()
+        member = bot.get_chat_member(chat_id, me.id)
+        status = getattr(member, "status", "")
+        if status == "creator":
+            return True
+        if status != "administrator":
+            return False
+        return bool(getattr(member, permission, False))
+    except Exception:
+        return False
 
 # ---------------- Menus ----------------
 SECTIONS = {
@@ -271,23 +398,19 @@ SECTIONS = {
 }
 
 PUBLIC_FEATURES = (
-    "🌈 <b>MASIH GUARD S1000+</b>\n"
+    "🌌 <b>MASIH GUARD S1000+</b>\n"
+    "<i>امنیت گروه، مدیریت هوشمند و ابزارهای کاربردی تلگرام</i>\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "🛡 <b>امنیت گروه</b>\n"
-    "├ ضد لینک و تبلیغات\n├ ضد اسپم و پیام تکراری\n├ کنترل فوروارد و رسانه\n"
-    "├ کلمات ممنوع و اخطار خودکار\n\n"
-    "👥 <b>مدیریت اعضا</b>\n"
-    "├ اخطار، سکوت، رفع سکوت\n├ مسدودسازی، آزادسازی و اخراج\n"
-    "├ خوشامد و خداحافظی سایبری\n├ تأیید درخواست عضویت\n├ سنجاق پیام و پاک‌سازی پیام‌ها با فرمان مدیر\n\n"
-    "⚙️ <b>ابزارهای کاربردی</b>\n"
-    "├ قوانین و پاسخ خودکار\n├ تبدیل رایگان متن به ۱۰۰ سبک فونت در گفت‌وگوی خصوصی\n"
-    "├ دریافت پروکسی‌های ذخیره‌شده\n├ هوش مصنوعی و تیکت پشتیبانی\n"
-    "├ بازی، امتیاز و گزارش فعالیت\n\n"
-    "💳 <b>کیف پول تومانی و اشتراک</b>\n"
-    "├ پاداش ۵٬۰۰۰ تومانی برای دعوت معتبر\n├ تاریخچهٔ تراکنش‌های تومانی\n"
-    "├ اشتراک‌های ۳۰، ۶۰ و ۹۰ روزه\n├ فعال‌سازی پس از تأیید مالک\n\n"
+    "🛡️ <b>امنیت:</b> ضدلینک، ضدتبلیغ، ضداسپم، ضدتکرار، کنترل فوروارد و رسانه، فیلتر شماره، کپچا و ضدیورش.\n"
+    "👥 <b>مدیریت اعضا:</b> اخطار، سکوت/رفع سکوت، بن/رفع بن، اخراج، گزارش، سنجاق و پاک‌سازی پیام‌ها.\n"
+    "👋 <b>ورود و خروج:</b> خوشامد و خداحافظی، متن و تصویر خوشامد، تأیید ورود و قوانین گروه.\n"
+    "⚙️ <b>ابزار مدیریت:</b> پاسخ خودکار، فرمان اختصاصی، یادداشت، اطلاعیه، آمار و گزارش فعالیت.\n"
+    "🧠 <b>دستیار هوشمند:</b> راهنمای امکانات و کمک به فرمان‌های پشتیبانی‌شده؛ اجرای مدیریت با بررسی دسترسی.\n"
+    "🎨 <b>ابزارهای جانبی:</b> فونت‌های متنی، پروکسی‌های ذخیره‌شده، تیکت پشتیبانی و بازی‌ها.\n"
+    "💳 <b>حساب کاربری:</b> کیف پول تومانی، تراکنش‌ها، دعوت دوستان، درخواست برداشت و بسته‌های اشتراک.\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "👇 از دکمه‌های زیر برای شروع استفاده کن."
+    "📌 <b>نکته:</b> فعال بودن هر قابلیت به تنظیمات، مجوز نصب و دسترسی‌های تلگرام بستگی دارد. پاداش دعوت و اشتراک طبق تنظیمات فعلی و پس از بررسی مربوطه ثبت می‌شوند.\n"
+    "👇 برای ادامه، یکی از گزینه‌های منو را انتخاب کن."
 )
 
 def public_keyboard():
@@ -370,6 +493,7 @@ def section_keyboard(section):
         ("📢 تغییر لینک کانال","ask:channel_url"),
         ("🌐 تغییر لینک وب‌سایت","ask:website_url"),
         ("👥 تنظیم پاداش دعوت (تومان)","ask:referral_reward_toman"),
+        ("🛒 تنظیم بسته‌های اشتراک","ask:subscription_packages"),
         ("🌐 نمایش فهرست پروکسی‌ها","show:proxies"),
         ("➕ افزودن پروکسی تلگرام","ask:add_proxy"),
         ("➖ حذف پروکسی با شماره","ask:delete_proxy"),
@@ -383,34 +507,55 @@ def section_keyboard(section):
     return kb
 
 
-def group_panel_keyboard(chat_id):
-    """Group-scoped panel; owner-only sales and wallet controls are not exposed."""
+def group_panel_keyboard(chat_id, user_id=None):
+    """Full group panel. Everyone can view it; only authorized admins get live controls."""
     settings = get_group_settings(chat_id)
+    can_manage = bool(user_id is not None and is_group_admin(chat_id, user_id))
     kb = types.InlineKeyboardMarkup(row_width=2)
-    labels = [("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
-              ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
-              ("👋 خوشامد", "welcome_on"), ("👋 خداحافظی", "farewell_on"), ("🔐 کپچا", "captcha_on"), ("🚨 ضد یورش", "anti_raid_on"),
-              ("🖼 قفل رسانه", "media_lock"), ("📵 فیلتر شماره", "phone_filter")]
+    labels = [
+        ("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
+        ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
+        ("↪️ ضد فوروارد", "anti_forward"), ("🖼 قفل همه رسانه‌ها", "media_lock"),
+        ("🏷 قفل تگ و منشن", "lock_mentions"), ("#️⃣ قفل هشتگ", "lock_hashtags"),
+        ("👤 قفل نام‌کاربری", "lock_usernames"), ("📵 فیلتر شماره", "phone_filter"),
+        ("🖼 قفل عکس", "lock_photos"), ("🎞 قفل فیلم", "lock_videos"),
+        ("📁 قفل فایل", "lock_files"), ("🎭 قفل استیکر و گیف", "lock_stickers"),
+        ("🎙 قفل ویس", "lock_voice"), ("⭕ قفل ویدئوی گرد", "lock_video_notes"),
+        ("👋 خوشامدگویی", "welcome_on"), ("👋 خداحافظی", "farewell_on"),
+        ("🛂 تأیید ورود", "join_approval"), ("🔐 کپچا", "captcha_on"),
+        ("🚨 ضد یورش", "anti_raid_on"), ("🧠 امنیت هوشمند", "smart_security"),
+    ]
     for label, key in labels:
-        status = "🟢" if settings.get(key, False) else "⚪"
-        kb.add(types.InlineKeyboardButton(f"{status} {label}", callback_data=f"gpanel:toggle:{key}"))
+        enabled = bool(settings.get(key, False))
+        status = "🟢" if enabled else "⚪"
+        if can_manage:
+            kb.add(types.InlineKeyboardButton(f"{status} {label}", callback_data=f"gpanel:toggle:{key}"))
+        else:
+            kb.add(types.InlineKeyboardButton(f"🔒 {label}", callback_data="gpanel:locked"))
     kb.row(types.InlineKeyboardButton("📜 مشاهده قوانین", callback_data="gpanel:rules"),
-           types.InlineKeyboardButton("🔄 تازه‌سازی", callback_data="gpanel:refresh"))
+           types.InlineKeyboardButton("📊 آمار گروه", callback_data="gpanel:stats"))
+    kb.row(types.InlineKeyboardButton("📚 راهنمای پنل", callback_data="gpanel:help"),
+           types.InlineKeyboardButton("🎮 بازی‌ها", callback_data="gpanel:games"))
+    kb.add(types.InlineKeyboardButton("🔄 تازه‌سازی پنل", callback_data="gpanel:refresh"))
     return kb
 
-def send_group_panel(chat_id, message_id=None):
-    text = ("🛡️ <b>پنل مدیریت گروه — MASIH GUARD</b>\n━━━━━━━━━━━━━━━━━━\n"
-            "تنظیمات همین گروه را از اینجا روشن یا خاموش کن.\n"
-            f"وضعیت مجوز: {'🟢 فعال' if is_group_licensed(chat_id) else '🟠 غیرفعال؛ امکانات حفاظتی محدودند'}\n"
-            "فقط مدیران گروه و مالک ربات اجازه تغییر تنظیمات دارند.")
+def send_group_panel(chat_id, message_id=None, user_id=None):
+    can_manage = bool(user_id is not None and is_group_admin(chat_id, user_id))
+    text = ("🛡️ <b>پنل کامل گروه — MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━━━━━\n"
+            "تمام گزینه‌های این گروه از همین پنل قابل مشاهده‌اند.\n"
+            f"وضعیت مجوز: {'🟢 فعال' if is_group_licensed(chat_id) else '🟠 غیرفعال؛ عملیات حفاظتی محدود است'}\n"
+            f"دسترسی شما: {'🛠 مدیر مجاز' if can_manage else '👁 مشاهده‌گر؛ دکمه‌های مدیریتی قفل هستند'}\n"
+            "🔒 اعضا می‌توانند بخش‌ها و راهنماها را ببینند؛ تغییر تنظیمات فقط با مجوز مدیر گروه انجام می‌شود.\n"
+            "⚠️ اجرای هر عملیات علاوه بر وضعیت دکمه، دوباره از نظر دسترسی بررسی می‌شود.")
+    markup = group_panel_keyboard(chat_id, user_id)
     if message_id is not None:
         try:
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=group_panel_keyboard(chat_id))
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
             return
         except Exception as e:
             if "message is not modified" in str(e).lower():
                 return
-    bot.send_message(chat_id, text, reply_markup=group_panel_keyboard(chat_id))
+    bot.send_message(chat_id, text, reply_markup=markup)
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
     # The menu can be viewed by anyone in private chat; every privileged callback is owner-gated.
@@ -613,13 +758,28 @@ def referral_text(uid):
         try: BOT_USERNAME = bot.get_me().username or ""
         except Exception: pass
     link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}" if BOT_USERNAME else "نام کاربری ربات هنوز در دسترس نیست."
-    count = sum(1 for x in DATA.get("referrals", {}).values() if int(x.get("referrer", 0)) == int(uid))
+    count = sum(1 for x in DATA.get("referrals", {}).values() if isinstance(x, dict) and int(x.get("referrer", 0)) == int(uid))
     reward = max(0, int(bot_settings().get("referral_reward_toman", 5000)))
-    return (f"👥 <b>دعوت دوستان</b>\n━━━━━━━━━━━━━━\n🔗 لینک دعوت اختصاصی شما:\n<code>{esc(link)}</code>\n\n"
-            f"👥 دعوت‌های ثبت‌شده: {count}\n💳 پاداش هر دعوت معتبر: {reward:,} تومان\n"
-            "⚠️ برای ثبت و واریز پاداش، کاربر جدید باید از لینک شما وارد گفت‌وگوی خصوصی ربات شود و Start را بزند. هر کاربر فقط یک‌بار حساب می‌شود.")
+    return (
+        "🎁 <b>باشگاه دعوت دوستان | MASIH GUARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔗 <b>لینک اختصاصی دعوت شما</b>\n"
+        f"<code>{esc(link)}</code>\n\n"
+        f"👥 دعوت‌های ثبت‌شده: <b>{count}</b>\n"
+        f"💰 پاداش هر دعوت معتبر طبق تنظیم فعلی: <b>{reward:,} تومان</b>\n\n"
+        "📌 <b>روش استفاده</b>\n"
+        "۱. لینک بالا را برای دوستت بفرست.\n"
+        "۲. دوستت باید با همان لینک وارد گفت‌وگوی خصوصی ربات شود و Start را بزند.\n"
+        "۳. دعوت معتبر طبق قوانین ربات ثبت می‌شود و پاداش احتمالی به کیف پول تومانی اضافه خواهد شد.\n\n"
+        "⚠️ هر کاربر فقط یک‌بار محاسبه می‌شود؛ ثبت دعوت یا پاداش، تابع شرایط و تنظیمات ربات است.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💳 برای دیدن موجودی، «کیف پول» را بزن؛ برای سوابق، «تراکنش‌ها» را انتخاب کن."
+    )
 
-SUBSCRIPTION_PACKAGES = ((30, 40000), (60, 80000), (90, 120000))
+
+def subscription_packages():
+    """Return the validated, currently configured subscription package list."""
+    return tuple((int(row[0]), int(row[1])) for row in bot_settings().get("subscription_packages", []))
 
 def subscription_support_keyboard():
     """Official purchase support links; bank details are never invented by the bot."""
@@ -636,7 +796,7 @@ def shop_keyboard():
         60: "🥈 ۶۰ روزه  ·  ۸۰٬۰۰۰ تومان",
         90: "🥇 ۹۰ روزه  ·  ۱۲۰٬۰۰۰ تومان",
     }
-    for days, price in SUBSCRIPTION_PACKAGES:
+    for days, price in subscription_packages():
         kb.add(types.InlineKeyboardButton(
             labels.get(days, f"⭐ {days} روز  ·  {price:,} تومان"),
             callback_data=f"shop:request:{days}:{price}"
@@ -653,7 +813,7 @@ def shop_text(uid):
     expiry = sub.get("expires") or "اشتراک فعال نیست"
     package_text = "\n".join(
         f"  ├ {days} روز  ·  <b>{price:,} تومان</b>"
-        for days, price in SUBSCRIPTION_PACKAGES
+        for days, price in subscription_packages()
     )
     status_icon = "🟢" if sub.get("expires") else "⚪"
     lines = [
@@ -707,7 +867,7 @@ def transactions_text(uid):
 
 def request_subscription(uid, days, price):
     days, price, uid = int(days), int(price), int(uid)
-    if (days, price) not in SUBSCRIPTION_PACKAGES:
+    if (days, price) not in subscription_packages():
         return "❌ بستهٔ اشتراک معتبر نیست."
     ensure_user(uid)
     reqs = DATA.setdefault("subscription_requests", {})
@@ -876,10 +1036,15 @@ def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
 
 def process_group_security(message):
     chat,user=message.chat,message.from_user
-    if not user or chat.type not in ("group","supergroup") or is_group_admin(chat.id,user.id): return False
+    if not user or chat.type not in ("group","supergroup"): return False
     s=get_group_settings(chat.id)
     if not DATA.get("settings", {}).get("smart_security", True) or not s.get("smart_security", True): return False
     if str(user.id) in {str(x) for x in s.get("whitelist", [])}: return False
+    admin_status = group_admin_status(chat.id, user.id)
+    if admin_status is True or admin_status is None:
+        # Skip enforcement if the member is an admin or Telegram could not confirm
+        # their role; avoid accidental moderation during an API outage.
+        return False
     text=get_text(message); key=f"{chat.id}:{user.id}"
     prev=DATA["seen"].get(key,{}); now=time.time(); reason=None
     if is_quiet_hours(s): reason="ارسال پیام در ساعت سکوت شبانه"
@@ -1050,6 +1215,21 @@ _GROUP_ALIASES = {
     'توضیحات گروه به': 'set_description',
 }
 
+def _strip_group_bot_prefix(text):
+    """Remove a leading bot name/mention so group creators can speak naturally."""
+    value = (text or "").strip()
+    if not value:
+        return value
+    # Accept an explicit bot mention at the beginning, e.g. @MasihGuard قفل لینک.
+    value = re.sub(r"^@[A-Za-z0-9_]{4,}(?:\s+|[,،:؛-]+)?", "", value, count=1)
+    # Accept Persian and Latin wake words only at the start; never strip words mid-sentence.
+    value = re.sub(
+        r"^(?:(?:ربات|هوش(?:\s*مصنوعی)?|دستیار|مسیح\s*گارد|ماسیح\s*گارد|ماسح\s*گارد|masih\s*guard|masihguard))\s*[,،:؛-]?\s*",
+        "", value, count=1, flags=re.IGNORECASE
+    )
+    return value.strip()
+
+
 def _normalize_group_command(text):
     value = (text or "").strip().casefold()
     value = value.replace("ي", "ی").replace("ك", "ک")
@@ -1137,6 +1317,17 @@ def _handle_group_shortcut(message, text):
             return True
         if not user or not is_group_admin(chat_id, uid):
             bot.reply_to(message, "⛔ فقط مدیران گروه می‌توانند تنظیمات امنیتی را تغییر دهند.")
+            return True
+        # Do not enable moderation filters that the bot cannot enforce due to missing Telegram rights.
+        deletion_filters = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock",
+                            "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice",
+                            "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}
+        required_permission = "can_delete_messages" if setting in deletion_filters else (
+            "can_restrict_members" if setting in {"captcha_on", "anti_raid_on"} else
+            "can_invite_users" if setting == "join_approval" else "")
+        if enabled and required_permission and not bot_has_group_permission(chat_id, required_permission):
+            friendly = {"can_delete_messages": "حذف پیام‌ها", "can_restrict_members": "محدودکردن اعضا", "can_invite_users": "دعوت کاربران/مدیریت درخواست ورود"}.get(required_permission, required_permission)
+            bot.reply_to(message, f"⚠️ برای فعال‌کردن این قابلیت، ربات باید مدیر گروه با مجوز «{friendly}» باشد. تنظیم تغییر نکرد.")
             return True
         get_group_settings(chat_id)[setting] = enabled
         save_data()
@@ -1350,16 +1541,15 @@ def group_message_handler(message):
     try:
         text = get_text(message)
         normalized_text = (text or "").strip().casefold().replace("ي", "ی").replace("ك", "ک")
+        # Group creator/admin commands may be written naturally with or without addressing the bot.
+        command_text = _strip_group_bot_prefix(text)
         first_token = normalized_text.split(maxsplit=1)[0] if normalized_text else ""
         if first_token.split("@", 1)[0] == "/start":
             bot.reply_to(message, group_start_guide(getattr(message.chat, "title", "گروه")))
             return
-        if re.sub(r"[\s‌]+", "", normalized_text) in {"پنل", "پنلمدیریت", "تنظیماتگروه", "panel", "settings"}:
+        if re.sub(r"[\s‌]+", "", normalized_text) in {"پنل", "پنلمدیریت", "تنظیماتگروه", "panel", "settings", "پنلگروه"}:
             uid = getattr(getattr(message, "from_user", None), "id", 0)
-            if not is_group_admin(message.chat.id, uid):
-                bot.reply_to(message, "⛔ پنل گروه فقط برای مدیران گروه و مالک ربات مجاز است.")
-            else:
-                send_group_panel(message.chat.id)
+            send_group_panel(message.chat.id, user_id=uid)
             return
         # Owner activates the current group directly; no group ID needs to be copied.
         normalized_activation = normalized_text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
@@ -1441,17 +1631,13 @@ def group_message_handler(message):
             bot.reply_to(message, f"📊 <b>آمار گروه</b>\n💬 پیام‌ها: {DATA['stats'].get('messages', 0)}\n🚫 موارد مسدودشده: {DATA['stats'].get('blocked', 0)}\n⚠️ اخطارها: {DATA['stats'].get('warns', 0)}")
             return
         if compact_public in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
-            game_url = os.getenv("WEB_GAME_URL", "").strip()
-            if not game_url:
-                base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
-                if base_url.startswith("https://"):
-                    game_url = base_url + "/game"
+            game_url = get_game_url()
             if game_url.startswith("https://"):
                 game_kb = types.InlineKeyboardMarkup()
                 game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
                 bot.reply_to(message, "🎮 <b>بازی MASIH GUARD</b>\nبرای باز کردن صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
             else:
-                bot.reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز از طرف هاست مشخص نشده است. متغیر RENDER_EXTERNAL_URL یا WEB_GAME_URL باید تنظیم باشد.")
+                bot.reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز از طرف هاست مشخص نشده است. متغیر WEB_GAME_URL یا PUBLIC_BASE_URL باید تنظیم باشد.")
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -1463,7 +1649,7 @@ def group_message_handler(message):
                 try: bot.send_message(message.chat.id, group_install_message(message.chat.id, getattr(message.chat,"title", "این گروه")), reply_markup=support_contact_markup())
                 except Exception: pass
             return
-        if text and handle_group_info_request(message, text):
+        if command_text and handle_group_info_request(message, command_text):
             return
         compact_group = re.sub(r"[\s‌]+", "", normalized_text)
         # Basic commands stay responsive before the group license gate.
@@ -1508,7 +1694,7 @@ def group_message_handler(message):
             bot.reply_to(message, "جانم! 🌹 برای سؤال، بنویس «ربات سؤال تو» یا «هوش سؤال تو». برای تغییر تنظیمات، دستور را روشن و واضح بنویس؛ مثلاً «قفل لینک روشن کن». ")
             return
         # Allow supported Persian group-management commands without requiring a reply to the bot.
-        if text and handle_ai_group_management(message, text.strip()):
+        if command_text and handle_ai_group_management(message, command_text):
             return
         # AI can be activated by replying to the bot or by starting with «هوش»، «ربات» or «دستیار».
         global BOT_USERNAME, BOT_ID
@@ -1526,23 +1712,55 @@ def group_message_handler(message):
                                  or (BOT_USERNAME and (getattr(getattr(replied, "from_user", None), "username", "") or "").casefold() == BOT_USERNAME)))
         ai_question = ""
         if text and text.strip() and not text.strip().startswith("/"):
+            raw_text = text.strip()
+            normalized_ai = raw_text.casefold().replace("ي", "ی").replace("ك", "ک")
             if reply_to_bot:
-                ai_question = text.strip()
+                ai_question = raw_text
             else:
-                normalized_ai = text.strip().casefold().replace("ي", "ی").replace("ك", "ک")
-                for prefix in ("از ربات بپرس ", "دستیار ", "ربات ", "هوش مصنوعی ", "هوش ", "هوش‌ ", "هش ", "هوس ", "هوشصنعتی "):
+                prefixes = ("از ربات بپرس ", "دستیار ", "ربات ", "هوش مصنوعی ", "هوش ", "هوش‌ ", "هش ", "هوس ", "هوشصنعتی ", "masih guard ", "masihguard ")
+                for prefix in prefixes:
                     if normalized_ai.startswith(prefix):
-                        ai_question = text.strip()[len(prefix):].strip()
+                        ai_question = raw_text[len(prefix):].strip()
                         break
-        if ai_question:
-            status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
-            answer = ask_ai(ai_question)
-            try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
-            except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
-            return
+                # Also respond to direct mentions of the bot, without answering every unrelated group message.
+                mention_only = False
+                if not ai_question and BOT_USERNAME and ("@" + BOT_USERNAME) in normalized_ai:
+                    ai_question = re.sub(r"@" + re.escape(BOT_USERNAME), "", raw_text, flags=re.I).strip(" ,،:؛!?؟")
+                    mention_only = not bool(ai_question)
+                named_bot_only = False
+                if not ai_question and any(name in normalized_ai for name in ("masih guard", "masihguard", "مسیح گارد", "ماسیح گارد", "ماسح گارد")):
+                    ai_question = re.sub(r"(?i)masih\s*guard|masihguard|مسیح\s*گارد|ماسیح\s*گارد|ماسح\s*گارد", "", raw_text).strip(" ,،:؛!?؟")
+                    named_bot_only = not bool(ai_question)
+                # Feature questions can be asked naturally without a fixed command prefix.
+                feature_terms = ("ضد لینک", "ضدلینک", "ضد اسپم", "ضداسپم", "کپچا", "پنل", "قوانین", "قانون", "آمار", "بازی", "فونت", "پروکسی", "خوشامد", "امنیت گروه", "امکانات ربات", "ربات چیکار", "ربات چکار")
+                question_cues = ("چطور", "چجوری", "چگونه", "چرا", "چیه", "چیست", "میشه", "می‌شه", "راهنما", "کمک", "امکانات", "توضیح", "بگو", "چکار", "چیکار", "کار می کنه", "کار می‌کنه")
+                action_cues = ("روشن کن", "خاموش کن", "فعال کن", "غیرفعال کن", "قفل کن", "باز کن", "تغییر بده", "بن کن", "سکوت کن", "اخراج کن", "حذف کن", "تنظیم کن")
+                if not ai_question and any(term in normalized_ai for term in feature_terms) and any(cue in normalized_ai for cue in question_cues) and not any(cue in normalized_ai for cue in action_cues):
+                    ai_question = raw_text
+                if named_bot_only or mention_only:
+                    bot.reply_to(message, "جانم؟ 🌈 دربارهٔ امکانات، امنیت گروه یا پنل چی می‌خوای بدونی؟")
+                    return
+                if not ai_question and normalized_ai.strip() in {"ربات", "هوش", "هوش مصنوعی", "دستیار", "masih guard", "masihguard"}:
+                    bot.reply_to(message, "جانم؟ 🌈 سؤالت رو هم بنویس تا راهنمایی‌ات کنم.")
+                    return
+            if ai_question:
+                # If the user prefixed a real implemented command with “ربات”, run the command path,
+                # not a text-only AI answer. All operations still verify admin and bot permissions.
+                if ai_question and _handle_group_shortcut(message, ai_question):
+                    return
+                if not ai_question:
+                    return
+                if not ai_question.strip():
+                    bot.reply_to(message, "جانم؟ دربارهٔ چه چیزی راهنمایی می‌خوای؟")
+                    return
+                status = bot.reply_to(message, "🧠 دارم بررسی می‌کنم…")
+                answer = ask_ai(ai_question)
+                try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+                except Exception: bot.send_message(message.chat.id, esc(answer[:3900]), reply_to_message_id=message.message_id)
+                return
         # Track group activity and bounded message history for selected statistics/cleanup features.
         track_group_activity(message.chat.id, getattr(message.from_user,"id",0), message.message_id)
-        if text and _handle_group_shortcut(message, text):
+        if command_text and _handle_group_shortcut(message, command_text):
             save_data()
             return
         # Group management shortcuts work only for admins and licensed groups.
@@ -1764,8 +1982,33 @@ def handle_join_request(request):
             DATA["stats"]["joins"]+=1; add_log("join_request_approved",request.chat.id,request.from_user.id,"تأیید خودکار ورود"); save_data()
     except Exception as e: print("Join request approval error:",repr(e))
 
+def local_bot_faq(question):
+    """Useful Persian answers when the optional external AI API is not configured."""
+    q = re.sub(r"[\s‌]+", " ", str(question or "").casefold().replace("ي", "ی").replace("ك", "ک")).strip()
+    if any(x in q for x in ("قفل لینک", "ضد لینک", "ضدلینک", "لینک ممنوع")):
+        return "🔗 برای تنظیم ضدلینک، در گروه بنویس «پنل» و بخش امنیت را باز کن؛ تغییر تنظیمات فقط برای مدیر گروه فعال است. ربات برای حذف لینک‌ها باید مجوز حذف پیام داشته باشد."
+    if any(x in q for x in ("ضد اسپم", "ضداسپم", "اسپم", "پیام تکراری")):
+        return "🛡️ برای کنترل اسپم و پیام تکراری، پنل گروه را با نوشتن «پنل» باز کن. مدیر گروه می‌تواند گزینه‌های امنیتی را تغییر دهد؛ برای اجرای حذف پیام، ربات به مجوز حذف پیام نیاز دارد."
+    if any(x in q for x in ("کپچا", "تأیید ورود", "تایید ورود", "عضو جدید")):
+        return "🔐 کپچا و تأیید ورود را از پنل گروه مدیریت کن. ربات باید مدیر گروه و دارای مجوز محدودکردن اعضا باشد؛ حتماً پس از فعال‌سازی، ورود عضو جدید را در گروه آزمایش کن."
+    if any(x in q for x in ("پنل", "تنظیمات گروه", "مدیریت گروه")):
+        return "🛡️ برای دیدن پنل کامل همین گروه بنویس «پنل». همه می‌توانند راهنما و آمار را ببینند؛ دکمه‌های تغییر تنظیمات فقط برای مدیران گروه فعال هستند."
+    if any(x in q for x in ("بازی", "گیم", "بازی ها", "بازی‌ها")):
+        return "🎮 برای بازی‌ها بنویس «بازی» یا از دکمهٔ بازی‌ها در پنل گروه استفاده کن. اگر صفحهٔ بازی باز نشد، آدرس HTTPS آن باید در WEB_GAME_URL هاست تنظیم شده باشد."
+    if any(x in q for x in ("فونت", "فانتزی")):
+        return "🔤 برای ساخت فونت فانتزی، در گفت‌وگوی خصوصی ربات کلمهٔ «فونت» را بفرست و بعد متن دلخواهت را ارسال کن."
+    if any(x in q for x in ("پروکسی", "proxy")):
+        return "🌐 برای دیدن فهرست پروکسی‌ها، در گفت‌وگوی خصوصی ربات «پروکسی» را بفرست. افزودن یا حذف پروکسی به سطح دسترسی مالک نیاز دارد."
+    if any(x in q for x in ("قانون", "قوانین")):
+        return "📜 برای دیدن قوانین گروه، بنویس «قوانین» یا در پنل روی «مشاهده قوانین» بزن."
+    if any(x in q for x in ("آمار", "چند نفر", "تعداد اعضا")):
+        return "📊 برای آمار پایه بنویس «آمار»؛ آمار دقیق‌تر در پنل گروه در دسترس است. اطلاعات اعضا به داده‌هایی محدود است که تلگرام و ربات در اختیار می‌گذارند."
+    if any(x in q for x in ("سلام", "درود", "خوبی", "چطوری")):
+        return "سلام! 🌈 من MASIH GUARD هستم. دربارهٔ پنل گروه، امنیت، قوانین، بازی‌ها، فونت‌ها یا امکاناتم بپرس. برای اجرای تنظیمات مدیریتی باید مدیر گروه باشی."
+    return "🧠 پیام مرتبطت رو دریافت کردم. می‌تونم دربارهٔ پنل گروه، امنیت، ضدلینک، ضداسپم، کپچا، قوانین، آمار، بازی‌ها، فونت و پروکسی راهنمایی بدم. برای گفت‌وگوی آزادتر، مالک باید AI_API_KEY معتبر را در هاست تنظیم کند."
+
 def ask_ai(question):
-    if not AI_API_KEY: return "⚠️ کلید هوش مصنوعی تنظیم نشده است. متغیر AI_API_KEY را در هاست وارد کن."
+    if not AI_API_KEY: return local_bot_faq(question)
     system_prompt = (
         "تو دستیار هوش مصنوعی کاملاً فارسیِ MASIH GUARD هستی. همیشه فقط به زبان فارسی پاسخ بده؛ "
         "همهٔ توضیح‌ها، راهنماها، عنوان‌ها و پیام‌های خطا باید فارسی و روان باشند. "
@@ -1978,7 +2221,7 @@ def handle_show(uid, action):
     elif action=="shop": bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard())
     elif action=="bot_settings":
         cfg = bot_settings()
-        packages = "، ".join(f"{days} روز/{price:,} تومان" for days, price in SUBSCRIPTION_PACKAGES)
+        packages = "، ".join(f"{days} روز/{price:,} تومان" for days, price in subscription_packages())
         custom_intro = "سفارشی" if str(cfg.get("public_features", "")).strip() else "پیش‌فرض"
         bot.send_message(uid,
             "🎛️ <b>تنظیمات عمومی ذخیره‌شده</b>\n━━━━━━━━━━━━━━\n"
@@ -2002,6 +2245,64 @@ def start_command(message):
         return
     bot.reply_to(message, group_start_guide(getattr(message.chat,"title","گروه")))
 
+@bot.message_handler(commands=["health", "statuscheck", "diagnose"])
+def health_command(message):
+    """A small live diagnostic without exposing secrets or internal configuration to groups."""
+    user = getattr(message, "from_user", None)
+    uid = int(getattr(user, "id", 0) or 0)
+    chat_type = getattr(getattr(message, "chat", None), "type", "private")
+    uptime = max(0, int(time.time() - STARTED_AT))
+    days, rem = divmod(uptime, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    uptime_text = f"{days}روز {hours}ساعت {minutes}دقیقه {seconds}ثانیه"
+    if chat_type != "private" or not is_owner(uid):
+        bot.reply_to(message, f"🟢 <b>{BRAND} {VERSION}</b> در حال اجراست.\n⏱ زمان فعالیت این اجرا: {esc(uptime_text)}")
+        return
+    telegram_ok = False
+    bot_label = "نامشخص"
+    try:
+        me = bot.get_me(timeout=5)
+        telegram_ok = True
+        bot_label = "@" + me.username if getattr(me, "username", None) else str(getattr(me, "first_name", "ربات"))
+    except Exception as error:
+        print("Health Telegram API check failed:", repr(error))
+    data_bytes = 0
+    data_valid = False
+    data_writable = False
+    try:
+        data_bytes = os.path.getsize(DATA_FILE) if os.path.isfile(DATA_FILE) else 0
+        if os.path.isfile(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as data_stream:
+                parsed_data = json.load(data_stream)
+            data_valid = isinstance(parsed_data, dict)
+        else:
+            data_valid = True  # The first save will create the file.
+        parent_dir = os.path.dirname(os.path.abspath(DATA_FILE)) or "."
+        data_writable = os.path.isdir(parent_dir) and os.access(parent_dir, os.W_OK)
+    except (OSError, ValueError, TypeError) as storage_error:
+        print("Health storage check failed:", repr(storage_error))
+    licensed = sum(1 for gid in DATA.get("group_licenses", {}) if is_group_licensed(gid))
+    body = (
+        f"🧪 <b>گزارش سلامت {BRAND} {VERSION}</b>\n━━━━━━━━━━━━━━━━━━\n"
+        f"📡 ارتباط API تلگرام: {'🟢 برقرار' if telegram_ok else '🔴 ناموفق؛ شبکه یا توکن را بررسی کن'}\n"
+        f"🤖 حساب ربات: <code>{esc(bot_label)}</code>\n"
+        f"⏱ زمان فعالیت: {esc(uptime_text)}\n"
+        f"💾 فایل داده: {'🟢 JSON معتبر' if data_valid else '🔴 نامعتبر/خوانده‌نشده'} ({data_bytes:,} بایت)\n"
+        f"✍️ دسترسی نوشتن پوشهٔ داده: {'🟢 مجاز' if data_writable else '🔴 بررسی شود'}\n"
+        f"🛡️ گروه‌های دارای مجوز فعال: {licensed}\n"
+        f"🧠 هوش مصنوعی: {'تنظیم شده' if AI_API_KEY else 'کلید تنظیم نشده؛ پاسخ محلی فعال است'}\n"
+        f"🎮 صفحهٔ بازی: {'آدرس HTTPS پیدا شد' if get_game_url() else 'WEB_GAME_URL را در هاست تنظیم کن'}\n"
+        "🔐 توکن و کلیدهای محرمانه در این گزارش نمایش داده نمی‌شوند."
+    )
+    bot.send_message(message.chat.id, body)
+
+
+@bot.message_handler(commands=["version"])
+def version_command(message):
+    bot.reply_to(message, f"🛡️ <b>{BRAND} {VERSION}</b>\nنسخهٔ تک‌فایلی پایتون؛ امکانات فعال به تنظیمات هاست و مجوزهای تلگرام وابسته‌اند.")
+
+
 @bot.message_handler(commands=["ping"])
 def ping_command(message):
     bot.reply_to(message, "🏓 MASIH GUARD فعاله و پیام رو دریافت کرد.")
@@ -2023,9 +2324,37 @@ def ai_command(message):
 @bot.message_handler(commands=["help", "commands"])
 def help_command(message):
     if getattr(message.chat, "type", "private") in ("group", "supergroup"):
-        bot.reply_to(message, "📚 <b>راهنمای MASIH GUARD</b>\n• پینگ / آیدی / قوانین / آمار\n• برای مدیریت عضو روی پیام او ریپلای کن و بن، سکوت، اخطار یا اخراج را بنویس.\n• برای بازی مرورگری بنویس «بازی».\n• تنظیمات امنیتی فقط با مجوز مدیر گروه و دسترسی لازم ربات اجرا می‌شوند.")
+        bot.reply_to(message,
+            "📚 <b>راهنمای سریع گروه | MASIH GUARD</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🧰 <b>عمومی:</b> «پنل»، «راهنما»، «قوانین»، «آمار»، «آیدی»، «پینگ»\n"
+            "👮 <b>مدیریت عضو:</b> روی پیام عضو ریپلای کن و سپس «اخطار»، «سکوت»، «رفع سکوت»، «بن»، «رفع بن» یا «اخراج» را بنویس.\n"
+            "🛡️ <b>امنیت:</b> «قفل لینک»، «قفل تبلیغ»، «ضد اسپم روشن»، «ضدتکرار روشن»، «قفل فوروارد» و فرمان‌های پشتیبانی‌شدهٔ مشابه.\n"
+            "🧠 برای پرسش، بنویس «ربات [سؤالت]». برای فهرست بیشتر بنویس «دستورات کامل».\n\n"
+            "🔒 فرمان مدیریتی فقط با مجوز مدیر گروه و دسترسی لازم ربات اجرا می‌شود؛ بعضی قابلیت‌ها به مجوز نصب وابسته‌اند.")
     else:
-        bot.send_message(message.chat.id, "📚 <b>راهنمای MASIH GUARD S1000+</b>\n/start — منوی اصلی\n/panel — پنل خصوصی مالک (فقط مالک)\n/profile — پروفایل و امتیاز\n/top — جدول امتیازها\n/game — فهرست ۵۰ بازی مرورگری\nبازی — بازی متنی تلگرام\n/stats — آمار ربات\n/ai متن سؤال — دستیار هوشمند\n/cancel — لغو عملیات در انتظار\n/ping — بررسی پاسخ‌گویی\n/id — شناسه کاربر و گفتگو", reply_markup=public_keyboard())
+        bot.send_message(message.chat.id,
+            "📚 <b>راهنمای MASIH GUARD S1000+</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🚀 <b>فرمان‌های اصلی</b>\n"
+            "• <code>/start</code> — منوی اصلی و معرفی امکانات\n"
+            "• <code>/help</code> — همین راهنما\n"
+            "• <code>/profile</code> — پروفایل، موجودی و دعوت‌ها\n"
+            "• <code>/top</code> — جدول امتیازهای بازی\n"
+            "• <code>/game</code> — فهرست بازی‌های مرورگری\n"
+            "• <code>/stats</code> — آمار ربات یا گروه\n"
+            "• <code>/ai متن سؤال</code> — پرسش از دستیار\n"
+            "• <code>/ping</code> — بررسی پاسخ‌گویی\n"
+            "• <code>/health</code> یا <code>/diagnose</code> — گزارش سلامت (جزئیات فقط برای مالک)\n"
+            "• <code>/version</code> — نسخهٔ ربات\n"
+            "• <code>/id</code> — شناسهٔ کاربر و گفتگو\n"
+            "• <code>/cancel</code> — لغو عملیات در انتظار\n"
+            "• <code>/panel</code> — پنل مالک (فقط مالک اصلی) یا پنل گروه در گروه\n\n"
+            "💳 <b>منوی کاربری:</b> کیف پول، خرید اشتراک، زیرمجموعه‌گیری، تراکنش‌ها، درخواست برداشت، تیکت پشتیبانی و هوش مصنوعی.\n"
+            "👥 <b>در گروه:</b> «پنل»، «راهنما»، «قوانین»، «آمار»، «دستورات کامل» و فرمان‌های مدیریتی پشتیبانی‌شده.\n"
+            "🔒 امکانات وابسته به مجوز نصب، تنظیمات سرویس و دسترسی‌های تلگرام هستند.",
+            reply_markup=public_keyboard())
+
 
 @bot.message_handler(commands=["profile", "me"])
 def profile_command(message):
@@ -2066,10 +2395,7 @@ def panel_command(message):
     uid = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
     chat_type = getattr(getattr(message, "chat", None), "type", "private")
     if chat_type in ("group", "supergroup"):
-        if not is_group_admin(message.chat.id, uid):
-            bot.reply_to(message, "⛔ پنل تنظیمات فقط برای مدیران همین گروه و مالک ربات مجاز است.")
-            return
-        send_group_panel(message.chat.id)
+        send_group_panel(message.chat.id, user_id=uid)
         return
     if not is_owner(uid):
         bot.send_message(uid, "⛔ پنل مدیریت مالک فقط برای مالک اصلی ربات در دسترس است.")
@@ -2097,11 +2423,7 @@ def cancel_command(message):
 
 @bot.message_handler(commands=["game", "games"])
 def game_command(message):
-    game_url = os.getenv("WEB_GAME_URL", "").strip()
-    if not game_url:
-        base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
-        if base_url.startswith("https://"):
-            game_url = base_url + "/game"
+    game_url = get_game_url()
     if game_url.startswith("https://"):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🎮 باز کردن فهرست ۵۰ بازی", url=game_url))
@@ -2159,48 +2481,62 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "تأیید انجام شد اما رفع محدودیت ناموفق بود؛ مدیر باید مجوز ربات را بررسی کند.", show_alert=True)
             return
         if data.startswith("gpanel:"):
-            if not call.message or call.message.chat.type not in ("group", "supergroup") or not is_group_admin(chat_id, uid):
-                bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه یا مالک اجازه تغییر دارد.", show_alert=True)
+            if not call.message or call.message.chat.type not in ("group", "supergroup"):
+                bot.answer_callback_query(call.id, "این پنل فقط داخل گروه کار می‌کند.", show_alert=True)
                 return
-            if data.startswith("gpanel:toggle:"):
-                key = data.split(":", 2)[2]
-                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "welcome_on", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on"}
-                if key not in allowed:
-                    bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
-                    return
-                settings = get_group_settings(chat_id)
-                if key in {"captcha_on", "anti_raid_on"}:
-                    try:
-                        me = bot.get_me(); member = bot.get_chat_member(chat_id, me.id)
-                        if getattr(member, "status", "") != "creator" and not bool(getattr(member, "can_restrict_members", False)):
-                            bot.answer_callback_query(call.id, "برای کپچا و ضد یورش، ربات باید مجوز محدودکردن اعضا داشته باشد.", show_alert=True); return
-                    except Exception:
-                        bot.answer_callback_query(call.id, "نتونستم مجوز محدودکردن اعضا را بررسی کنم.", show_alert=True); return
-                protective = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock", "phone_filter"}
-                if key in protective:
-                    try:
-                        me = bot.get_me()
-                        member = bot.get_chat_member(chat_id, me.id)
-                        status = getattr(member, "status", "")
-                        can_delete = status == "creator" or (status == "administrator" and bool(getattr(member, "can_delete_messages", False)))
-                        if status not in ("administrator", "creator") or not can_delete:
-                            bot.answer_callback_query(call.id, "ربات باید مدیر گروه با مجوز حذف پیام باشد.", show_alert=True)
-                            return
-                    except Exception:
-                        bot.answer_callback_query(call.id, "نتونستم دسترسی‌های ربات رو بررسی کنم؛ تنظیم تغییر نکرد.", show_alert=True)
-                        return
-                settings[key] = not bool(settings.get(key, False))
-                save_data()
-                bot.answer_callback_query(call.id, "روشن شد." if settings[key] else "خاموش شد.")
-                send_group_panel(chat_id, call.message.message_id)
+            if data == "gpanel:locked":
+                bot.answer_callback_query(call.id, "🔒 این دکمه برای مشاهده‌گرها قفل است؛ مدیر گروه می‌تواند از آن استفاده کند.", show_alert=True)
                 return
             if data == "gpanel:rules":
                 bot.answer_callback_query(call.id)
                 bot.send_message(chat_id, "📜 <b>قوانین گروه</b>\n" + esc(get_group_settings(chat_id).get("rules", "قوانینی ثبت نشده است.")))
                 return
+            if data == "gpanel:stats":
+                bot.answer_callback_query(call.id)
+                gs = DATA.setdefault("group_stats", {}).get(str(chat_id), {})
+                active = len(DATA.setdefault("active_members", {}).get(str(chat_id), {}))
+                bot.send_message(chat_id, f"📊 <b>آمار گروه</b>\nپیام‌ها: {int(gs.get('messages', 0))}\nموارد مسدودشده: {int(gs.get('blocked', 0))}\nورودها: {int(gs.get('joins', 0))}\nخروج‌ها: {int(gs.get('leaves', 0))}\nکاربران دیده‌شده: {active}")
+                return
+            if data == "gpanel:help":
+                bot.answer_callback_query(call.id)
+                bot.send_message(chat_id, "📚 <b>راهنمای پنل MASIH GUARD</b>\nاعضا می‌توانند قوانین، آمار و راهنما را ببینند. دکمه‌های قفل‌شده فقط برای مدیران گروه فعال می‌شوند. برای تغییر تنظیمات، ربات باید مدیر گروه و دارای مجوزهای لازم باشد.\nبرای پرسش از دستیار بنویس: <code>ربات [سؤالت]</code> یا روی پیام ربات پاسخ بده.")
+                return
+            if data == "gpanel:games":
+                bot.answer_callback_query(call.id)
+                game_url = get_game_url()
+                if game_url.startswith("https://"):
+                    game_kb = types.InlineKeyboardMarkup()
+                    game_kb.add(types.InlineKeyboardButton("🎮 باز کردن بازی‌ها", url=game_url))
+                    bot.send_message(chat_id, "🎮 <b>MASIH GUARD ARCADE</b>", reply_markup=game_kb)
+                else:
+                    bot.send_message(chat_id, "⚠️ آدرس بازی هنوز در هاست تنظیم نشده است.")
+                return
             if data == "gpanel:refresh":
                 bot.answer_callback_query(call.id)
-                send_group_panel(chat_id, call.message.message_id)
+                send_group_panel(chat_id, call.message.message_id, user_id=uid)
+                return
+            if not is_group_admin(chat_id, uid):
+                bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه یا مالک اجازه تغییر تنظیمات دارد.", show_alert=True)
+                return
+            if data.startswith("gpanel:toggle:"):
+                key = data.split(":", 2)[2]
+                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "welcome_on", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
+                if key not in allowed:
+                    bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
+                    return
+                settings = get_group_settings(chat_id)
+                next_enabled = not bool(settings.get(key, False))
+                required_permission = "can_delete_messages" if key in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"} else (
+                    "can_restrict_members" if key in {"captcha_on", "anti_raid_on"} else
+                    "can_invite_users" if key == "join_approval" else "")
+                if next_enabled and required_permission and not bot_has_group_permission(chat_id, required_permission):
+                    friendly = {"can_delete_messages": "حذف پیام‌ها", "can_restrict_members": "محدودکردن اعضا", "can_invite_users": "دعوت کاربران/مدیریت درخواست ورود"}.get(required_permission, required_permission)
+                    bot.answer_callback_query(call.id, f"برای فعال‌کردن این قابلیت، ربات باید مجوز «{friendly}» داشته باشد.", show_alert=True)
+                    return
+                settings[key] = next_enabled
+                save_data()
+                bot.answer_callback_query(call.id, "روشن شد." if settings[key] else "خاموش شد.")
+                send_group_panel(chat_id, call.message.message_id, user_id=uid)
                 return
         management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
         if management_action:
@@ -2326,7 +2662,7 @@ def callback_handler(call):
             if not is_owner(uid):
                 bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
             action=data.split(":",1)[1]
-            global_actions={"public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs","register_bot_admin","remove_bot_admin"}
+            global_actions={"public_features","channel_url","website_url","referral_reward_toman","subscription_packages","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs","register_bot_admin","remove_bot_admin"}
             if action in global_actions:
                 WAITING[uid]={"action":action}
                 prompts={
@@ -2334,6 +2670,7 @@ def callback_handler(call):
                     "channel_url":"لینک کامل کانال با https:// را بفرست.",
                     "website_url":"لینک کامل وب‌سایت با https:// را بفرست.",
                     "referral_reward_toman":"مبلغ پاداش هر دعوت معتبر را به تومان وارد کن (پیش‌فرض ۵۰۰۰).",
+                    "subscription_packages":"بسته‌ها را به شکل روز:قیمت وارد کن؛ مثال: 30:40000,60:80000,90:120000 . این فهرست جایگزین بسته‌های قبلی می‌شود.",
                     "wallet_adjust":"قالب: شناسه کاربر | مبلغ (+برای افزایش و -برای کاهش) | دلیل تغییر",
                     "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
                     "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
@@ -2516,7 +2853,7 @@ def private_text_handler(message):
     if not pending: return
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
-                "public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
+                "public_features","channel_url","website_url","referral_reward_toman","subscription_packages","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
                 "welcome_text","farewell_text","rules","auto_reply","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","show_notes_group","register_bot_admin","remove_bot_admin"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
@@ -2568,7 +2905,7 @@ def private_text_handler(message):
             try: bot.send_message(int(found_id), "ℹ️ دسترسی ادمین فروش ربات توسط مالک اصلی حذف شد.")
             except Exception: pass
             return
-        if action in {"public_features","channel_url","website_url","referral_reward_toman"}:
+        if action in {"public_features","channel_url","website_url","referral_reward_toman","subscription_packages"}:
             cfg = bot_settings()
             if action == "public_features":
                 if text.casefold() in {"پیش‌فرض", "default", "بازنشانی"}:
@@ -2584,10 +2921,26 @@ def private_text_handler(message):
                 cfg[action] = text
                 message_text = "✅ لینک ذخیره شد."
             elif action == "referral_reward_toman":
-                value = int(text)
+                value = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
                 if not 0 <= value <= 1000000: raise ValueError("مبلغ باید بین ۰ تا ۱٬۰۰۰٬۰۰۰ تومان باشد.")
                 cfg["referral_reward_toman"] = value
                 message_text = f"✅ پاداش دعوت روی {value:,} تومان تنظیم شد."
+            elif action == "subscription_packages":
+                normalized = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+                parsed = []
+                for item in normalized.split(","):
+                    pair = item.strip().split(":")
+                    if len(pair) != 2: raise ValueError("قالب درست: 30:40000,60:80000,90:120000")
+                    days, price = int(pair[0].strip()), int(pair[1].strip())
+                    if not 1 <= days <= 3650 or not 0 <= price <= 2_000_000_000:
+                        raise ValueError("مدت باید ۱ تا ۳۶۵۰ روز و قیمت ۰ تا ۲٬۰۰۰٬۰۰۰٬۰۰۰ تومان باشد.")
+                    if any(existing[0] == days for existing in parsed):
+                        raise ValueError("مدت هر بسته باید یکتا باشد؛ یک مدت را دوبار ننویس.")
+                    parsed.append([days, price])
+                    if len(parsed) > 10: raise ValueError("حداکثر ۱۰ بسته می‌توانی ثبت کنی.")
+                if not parsed: raise ValueError("حداقل یک بسته لازم است.")
+                cfg["subscription_packages"] = parsed
+                message_text = "✅ بسته‌های اشتراک ذخیره شدند: " + "، ".join(f"{days} روز / {price:,} تومان" for days, price in parsed)
             save_data(); add_log("bot_setting_updated", "", uid, action)
             WAITING.pop(uid, None)
             bot.send_message(uid, message_text)
@@ -2710,7 +3063,15 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             setting=pending.get("setting",""); s=get_group_settings(target)
             if not isinstance(s.get(setting),bool): raise ValueError("این تنظیم قابل تغییر نیست.")
-            s[setting]=not s[setting]; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
+            next_enabled = not bool(s[setting])
+            deletion_filters = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}
+            required_permission = "can_delete_messages" if setting in deletion_filters else (
+                "can_restrict_members" if setting in {"captcha_on", "anti_raid_on"} else
+                "can_invite_users" if setting == "join_approval" else "")
+            if next_enabled and required_permission and not bot_has_group_permission(target, required_permission):
+                friendly = {"can_delete_messages": "حذف پیام‌ها", "can_restrict_members": "محدودکردن اعضا", "can_invite_users": "دعوت کاربران/مدیریت درخواست ورود"}.get(required_permission, required_permission)
+                raise PermissionError(f"برای فعال‌کردن این قابلیت، ربات باید مدیر گروه با مجوز «{friendly}» باشد.")
+            s[setting]=next_enabled; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
             label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
             bot.send_message(uid,f"✅ {label} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
         elif action in ("activate_group", "extend_group", "revoke_group"):
