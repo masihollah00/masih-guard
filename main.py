@@ -5,6 +5,10 @@ import os, re, json, time, random, threading, io, urllib.request, urllib.error, 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, date
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9 fallback
+    ZoneInfo = None
 import telebot
 from telebot import types
 
@@ -21,12 +25,15 @@ WEBSITE_URL = os.getenv("WEBSITE_URL", "https://neon-portfolio-7vhj.onrender.com
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/IRHACK_APP33").strip()
 OWNER_CONTACT_URL = os.getenv("OWNER_CONTACT_URL", "https://t.me/Ma3ih01").strip()
 BRAND, VERSION = "MASIH GUARD", "S1000+"
+TIMEZONE_NAME = os.getenv("TIMEZONE", "Asia/Tehran").strip() or "Asia/Tehran"
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است؛ آن را در Environment هاست قرار بده.")
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True, num_threads=4)
 LOCK = threading.RLock()
 GROUP_ADMIN_CACHE = {}  # (chat_id, user_id) -> (monotonic expiry, bool)
+FORCE_JOIN_CACHE = {}  # (chat_id, user_id) -> (monotonic expiry, missing channel rows)
+ENTRY_GATE_NOTICE_CACHE = {}  # (chat_id, user_id) -> monotonic expiry
 GROUP_ADMIN_CACHE_TTL = 15
 WAITING, GAMES, PANEL_CURRENT, PANEL_HISTORY = {}, {}, {}, {}
 GAME_CYCLES = {}
@@ -38,6 +45,7 @@ DEFAULT_GROUP = {
     "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True, "anti_raid_on": False, "raid_mode_until": 0,
     "anti_forward": False, "media_lock": False, "lock_mentions": False, "lock_hashtags": False, "lock_usernames": False, "welcome_on": True,
     "farewell_on": False, "join_approval": False, "bad_words": [], "whitelist": [],
+    "force_join_on": False, "force_join_channels": [], "force_add_on": False, "force_add_count": 3, "force_add_credits": {}, "invite_links": [],
     "warn_limit": 3, "lock_photos": False, "lock_videos": False, "lock_files": False,
     "lock_stickers": False, "lock_voice": False, "lock_video_notes": False,
     "rules": "احترام به اعضا الزامی است.",
@@ -49,7 +57,7 @@ DEFAULT_GROUP = {
 DEFAULT_DATA = {
     "groups": {}, "warnings": {}, "logs": [], "proxies": [], "customers": {}, "moderation_lists": {}, "message_history": {},
     "tickets": {}, "points": {}, "seen": {}, "stats": {"messages": 0, "blocked": 0,
-    "warns": 0, "joins": 0, "tickets": 0},
+    "warns": 0, "joins": 0, "tickets": 0, "start_commands": 0, "users_started": 0},
     "settings": {"smart_security": True},
     "bot_settings": {
         "public_features": "", "channel_url": "https://t.me/IRHACK_APP33",
@@ -57,7 +65,7 @@ DEFAULT_DATA = {
         "referral_reward_toman": 5000,
         "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
-    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {},
+    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {}, "force_add_credits": {}, "force_invite_links": {},
     "subscription_requests": {}, "payout_requests": {},
     "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}, "bot_admins": {}
@@ -65,8 +73,20 @@ DEFAULT_DATA = {
 
 def clone(obj): return json.loads(json.dumps(obj, ensure_ascii=False))
 def esc(value): return html.escape(str(value or ""), quote=False)
-def now_text(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-def today(): return date.today().isoformat()
+def local_now():
+    """Consistent timezone-aware clock for welcome messages and audit timestamps."""
+    if ZoneInfo:
+        try:
+            return datetime.now(ZoneInfo(TIMEZONE_NAME))
+        except Exception:
+            pass
+    return datetime.now().astimezone()
+
+def persian_digits(value):
+    return str(value).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+def now_text(): return local_now().strftime("%Y-%m-%d %H:%M:%S")
+def today(): return local_now().date().isoformat()
 
 def load_data():
     """Load persistent data; preserve a damaged file for manual recovery instead of overwriting it."""
@@ -197,6 +217,8 @@ def get_group_settings(chat_id):
     if key not in DATA["groups"]: DATA["groups"][key] = clone(DEFAULT_GROUP)
     settings = DATA["groups"][key]
     for k, v in DEFAULT_GROUP.items(): settings.setdefault(k, clone(v))
+    # Core onboarding behavior: welcome messages cannot be disabled from panel or old data.
+    settings["welcome_on"] = True
     return settings
 
 def group_license_status(chat_id):
@@ -278,7 +300,8 @@ def start_welcome_text(user):
         "🚀 <b>امکانات اصلی</b>\n"
         "🔐 <b>امنیت گروه:</b> کنترل لینک و تبلیغات، ضداسپم و تکرار، کنترل فوروارد و رسانه، فیلتر شماره تماس، کلمات ممنوع، کپچا و ابزارهای امنیت هوشمند.\n"
         "👥 <b>مدیریت اعضا:</b> اخطار، سکوت و رفع سکوت، مسدودسازی و آزادسازی، اخراج، گزارش تخلف، سنجاق و پاک‌سازی پیام‌ها با فرمان مجاز.\n"
-        "👋 <b>مدیریت ورود و خروج:</b> خوشامدگویی، خداحافظی، تنظیم متن و تصویر خوشامد، تأیید ورود و کنترل ضدیورش.\n"
+        "👋 <b>مدیریت ورود و خروج:</b> خوشامدگویی، خداحافظی، تنظیم متن و تصویر خوشامد، تأیید ورود و کنترل ضدیورش.\\n"
+        "📢 <b>الزام ورود:</b> جوین اجباری کانال‌های تنظیم‌شده و الزام دعوت اعضا با لینک اختصاصی، در صورت فعال‌سازی مدیر گروه.\\n"
         "⚙️ <b>ابزارهای گروه:</b> قوانین، پاسخ خودکار، فرمان اختصاصی، یادداشت‌ها، اطلاعیه، آمار و گزارش فعالیت.\n"
         "🧠 <b>دستیار هوشمند:</b> راهنمایی دربارهٔ امکانات و درخواست‌های پشتیبانی‌شده؛ اجرای تغییرات گروه فقط پس از بررسی دسترسی مدیر انجام می‌شود.\n"
         "🎨 <b>ابزارهای جانبی:</b> تبدیل متن به سبک‌های فونت، فهرست پروکسی‌های ذخیره‌شده، تیکت پشتیبانی و بازی‌های سرگرمی.\n"
@@ -307,7 +330,8 @@ def group_start_guide(chat_title="گروه"):
         "👋 سلام! برای مدیریت گروه، ربات باید مدیر گروه باشد و مجوزهای لازم را داشته باشد.\n\n"
         "🔐 تنظیمات پنل و مدیریت مالک در گفت‌وگوی خصوصی ربات انجام می‌شود؛ پیام‌های پنل در گروه منتشر نمی‌شوند.\n"
         "🧰 مدیران گروه می‌توانند از فرمان‌های فارسی پشتیبانی‌شده استفاده کنند؛ برای اقدام روی یک عضو، روی پیام همان عضو ریپلای کنید.\n"
-        "📜 برای دیدن قوانین بنویسید «قوانین»، برای آمار «آمار»، و برای راهنمای فرمان‌ها «راهنما».\n"
+        "📜 برای دیدن قوانین بنویسید «قوانین»، برای آمار «آمار»، و برای راهنمای فرمان‌ها «راهنما».\\n"
+        "📢 اگر جوین اجباری روشن باشد، باید عضو کانال‌های نمایش‌داده‌شده باشید. برای لینک دعوت اختصاصی، در گروه /mylink را بزنید (در صورت فعال بودن اد اجباری).\\n"
         "⚠️ بعضی امکانات فقط با مجوز فعال گروه و دسترسی ادمین ربات کار می‌کنند."
     )
 
@@ -452,7 +476,7 @@ def section_keyboard(section):
     choices = {
       "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist"),
       ("🧠 امنیت هوشمند این گروه","toggle:group_smart_security"),("🚨 ضد یورش ورود","toggle:anti_raid_on"),("🌙 ساعت سکوت شبانه","ask:quiet_hours"),("🆔 شناسه و تنظیمات گروه","ask:group_settings")],
-      "welcome":[("👋 خوشامدگویی","toggle:welcome_on"),("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text"),
+      "welcome":[("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("📢 تنظیم جوین اجباری","ask:force_join"),("➕ تنظیم اد اجباری","ask:force_add"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text"),
       ("🖼 تنظیم تصویر خوشامد","ask:welcome_image"),("🗑 زمان حذف خوشامد","ask:welcome_delete_seconds"),("🔐 تأیید عضو جدید (کپچا)","toggle:captcha_on")],
       "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word"),("🧩 افزودن فرمان اختصاصی","ask:add_custom_command"),("🗑 حذف فرمان اختصاصی","ask:delete_custom_command"),("📝 افزودن یادداشت","ask:add_note"),("🗑 حذف یادداشت","ask:delete_note"),("📋 فهرست یادداشت‌ها","show:notes"),("📣 ارسال اطلاعیه","ask:announcement")],
       "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
@@ -477,7 +501,7 @@ def section_keyboard(section):
         ("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر/گیف","toggle:lock_stickers"),
         ("🎙 قفل ویس","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),
         ("📵 فیلتر شماره تماس","toggle:phone_filter"),("🧠 امنیت هوشمند گروه","toggle:group_smart_security"),
-        ("👋 خوشامدگویی","toggle:welcome_on"),("🌙 خداحافظی","toggle:farewell_on"),("🔐 کپچا","toggle:captcha_on"),("🚨 ضد یورش","toggle:anti_raid_on"),
+        ("🌙 خداحافظی","toggle:farewell_on"),("🔐 کپچا","toggle:captcha_on"),("🚨 ضد یورش","toggle:anti_raid_on"),
         ("🛂 تأیید ورود","toggle:join_approval"),("🌙 تنظیم ساعت سکوت","ask:quiet_hours"),
         ("⚙️ سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules"),
         ("🆔 نمایش تنظیمات یک گروه","ask:group_settings")
@@ -507,55 +531,144 @@ def section_keyboard(section):
     return kb
 
 
-def group_panel_keyboard(chat_id, user_id=None):
-    """Full group panel. Everyone can view it; only authorized admins get live controls."""
+GROUP_PANEL_PAGES = {}
+
+GROUP_PANEL_SECTIONS = {
+    "security": {
+        "title": "🛡 امنیت و ضداسپم",
+        "toggles": [
+            ("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
+            ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
+            ("↪️ ضد فوروارد", "anti_forward"), ("🧠 امنیت هوشمند", "smart_security"),
+            ("🚨 ضد یورش", "anti_raid_on"), ("🔐 کپچا", "captcha_on"),
+        ],
+        "asks": [("⚙️ سقف اخطار", "warn_limit"), ("🌙 ساعت سکوت", "quiet_hours")],
+    },
+    "locks": {
+        "title": "🔒 قفل محتوا",
+        "toggles": [
+            ("🖼 همه رسانه‌ها", "media_lock"), ("🏷 تگ و منشن", "lock_mentions"),
+            ("#️⃣ هشتگ", "lock_hashtags"), ("👤 نام‌کاربری", "lock_usernames"),
+            ("📵 شماره تماس", "phone_filter"), ("🖼 عکس", "lock_photos"),
+            ("🎞 ویدئو", "lock_videos"), ("📁 فایل", "lock_files"),
+            ("🎭 استیکر و گیف", "lock_stickers"), ("🎙 ویس", "lock_voice"),
+            ("⭕ ویدئوی گرد", "lock_video_notes"),
+        ],
+        "asks": [],
+    },
+    "welcome": {
+        "title": "👋 ورود، خوشامد و قوانین",
+        "toggles": [
+            ("🚪 پیام خداحافظی", "farewell_on"),
+            ("🛂 تأیید ورود", "join_approval"),
+        ],
+        "asks": [
+            ("✏️ متن خوشامد", "welcome_text"), ("✏️ متن خداحافظی", "farewell_text"),
+            ("📜 تنظیم قوانین", "rules"), ("🖼 تصویر خوشامد", "welcome_image"),
+            ("🧹 زمان حذف خوشامد", "welcome_delete_seconds"),
+        ],
+    },
+    "entry": {
+        "title": "📢 جوین و اد اجباری",
+        "toggles": [],
+        "asks": [],
+    },
+    "automation": {
+        "title": "🤖 پاسخ‌ها و ابزارهای خودکار",
+        "toggles": [],
+        "asks": [
+            ("💬 افزودن پاسخ خودکار", "auto_reply"), ("🧹 حذف پاسخ خودکار", "delete_reply"),
+            ("🚫 افزودن کلمه ممنوع", "bad_word"), ("🌙 تنظیم ساعت سکوت", "quiet_hours"),
+            ("➕ فرمان سفارشی", "add_custom_command"), ("➖ حذف فرمان سفارشی", "delete_custom_command"),
+            ("📝 افزودن یادداشت", "add_note"), ("🗑 حذف یادداشت", "delete_note"),
+        ],
+    },
+    "overview": {
+        "title": "📊 آمار و وضعیت",
+        "toggles": [],
+        "asks": [],
+    },
+    "help": {
+        "title": "📚 راهنما",
+        "toggles": [],
+        "asks": [],
+    },
+}
+
+def group_panel_keyboard(chat_id, user_id=None, section="home"):
+    """Paginated group panel; admin actions are displayed only to confirmed group admins."""
     settings = get_group_settings(chat_id)
     can_manage = bool(user_id is not None and is_group_admin(chat_id, user_id))
     kb = types.InlineKeyboardMarkup(row_width=2)
-    labels = [
-        ("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
-        ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
-        ("↪️ ضد فوروارد", "anti_forward"), ("🖼 قفل همه رسانه‌ها", "media_lock"),
-        ("🏷 قفل تگ و منشن", "lock_mentions"), ("#️⃣ قفل هشتگ", "lock_hashtags"),
-        ("👤 قفل نام‌کاربری", "lock_usernames"), ("📵 فیلتر شماره", "phone_filter"),
-        ("🖼 قفل عکس", "lock_photos"), ("🎞 قفل فیلم", "lock_videos"),
-        ("📁 قفل فایل", "lock_files"), ("🎭 قفل استیکر و گیف", "lock_stickers"),
-        ("🎙 قفل ویس", "lock_voice"), ("⭕ قفل ویدئوی گرد", "lock_video_notes"),
-        ("👋 خوشامدگویی", "welcome_on"), ("👋 خداحافظی", "farewell_on"),
-        ("🛂 تأیید ورود", "join_approval"), ("🔐 کپچا", "captcha_on"),
-        ("🚨 ضد یورش", "anti_raid_on"), ("🧠 امنیت هوشمند", "smart_security"),
-    ]
-    for label, key in labels:
-        enabled = bool(settings.get(key, False))
-        status = "🟢" if enabled else "⚪"
-        if can_manage:
-            kb.add(types.InlineKeyboardButton(f"{status} {label}", callback_data=f"gpanel:toggle:{key}"))
-        else:
-            kb.add(types.InlineKeyboardButton(f"🔒 {label}", callback_data="gpanel:locked"))
-    kb.row(types.InlineKeyboardButton("📜 مشاهده قوانین", callback_data="gpanel:rules"),
-           types.InlineKeyboardButton("📊 آمار گروه", callback_data="gpanel:stats"))
-    kb.row(types.InlineKeyboardButton("📚 راهنمای پنل", callback_data="gpanel:help"),
-           types.InlineKeyboardButton("🎮 بازی‌ها", callback_data="gpanel:games"))
-    kb.add(types.InlineKeyboardButton("🔄 تازه‌سازی پنل", callback_data="gpanel:refresh"))
+    if section == "home":
+        rows = [
+            ("🛡 امنیت و ضداسپم", "security"), ("🔒 قفل محتوا", "locks"),
+            ("👋 ورود و خوشامد", "welcome"), ("📢 جوین و اد اجباری", "entry"),
+            ("🤖 پاسخ‌ها و خودکار", "automation"), ("📊 آمار و وضعیت", "overview"),
+            ("📚 راهنمای کامل", "help"),
+        ]
+        for label, page in rows:
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"gpanel:page:{page}"))
+    elif section in GROUP_PANEL_SECTIONS:
+        cfg = GROUP_PANEL_SECTIONS[section]
+        for label, key in cfg.get("toggles", []):
+            enabled = bool(settings.get(key, False))
+            status = "🟢" if enabled else "⚪"
+            callback = f"gpanel:toggle:{key}" if can_manage else "gpanel:locked"
+            kb.add(types.InlineKeyboardButton(f"{status} {label}", callback_data=callback))
+        if section == "entry":
+            kb.row(
+                types.InlineKeyboardButton(
+                    ("🟢" if settings.get("force_join_on") else "⚪") + " تنظیم جوین اجباری",
+                    callback_data="gpanel:configure_force_join" if can_manage else "gpanel:locked"),
+                types.InlineKeyboardButton(
+                    ("🟢" if settings.get("force_add_on") else "⚪") + " تنظیم اد اجباری",
+                    callback_data="gpanel:configure_force_add" if can_manage else "gpanel:locked"))
+            kb.add(types.InlineKeyboardButton("🔗 دریافت لینک دعوت اختصاصی", callback_data="gpanel:mylink"))
+        for label, action in cfg.get("asks", []):
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"gpanel:ask:{action}" if can_manage else "gpanel:locked"))
+        if section == "overview":
+            kb.row(types.InlineKeyboardButton("📊 آمار گروه", callback_data="gpanel:stats"),
+                   types.InlineKeyboardButton("⚙️ وضعیت تنظیمات", callback_data="gpanel:settings"))
+            kb.add(types.InlineKeyboardButton("🎮 بازی‌ها", callback_data="gpanel:games"))
+        if section == "help":
+            kb.add(types.InlineKeyboardButton("📖 راهنمای فرمان‌ها", callback_data="gpanel:commands"))
+            kb.add(types.InlineKeyboardButton("🧪 بررسی سلامت ربات", callback_data="gpanel:health"))
+    kb.row(types.InlineKeyboardButton("🏠 صفحه اصلی", callback_data="gpanel:page:home"),
+           types.InlineKeyboardButton("🔄 تازه‌سازی", callback_data="gpanel:refresh"))
     return kb
 
-def send_group_panel(chat_id, message_id=None, user_id=None):
+def send_group_panel(chat_id, message_id=None, user_id=None, section="home"):
     can_manage = bool(user_id is not None and is_group_admin(chat_id, user_id))
-    text = ("🛡️ <b>پنل کامل گروه — MASIH GUARD S1000+</b>\n━━━━━━━━━━━━━━━━━━\n"
-            "تمام گزینه‌های این گروه از همین پنل قابل مشاهده‌اند.\n"
-            f"وضعیت مجوز: {'🟢 فعال' if is_group_licensed(chat_id) else '🟠 غیرفعال؛ عملیات حفاظتی محدود است'}\n"
-            f"دسترسی شما: {'🛠 مدیر مجاز' if can_manage else '👁 مشاهده‌گر؛ دکمه‌های مدیریتی قفل هستند'}\n"
-            "🔒 اعضا می‌توانند بخش‌ها و راهنماها را ببینند؛ تغییر تنظیمات فقط با مجوز مدیر گروه انجام می‌شود.\n"
-            "⚠️ اجرای هر عملیات علاوه بر وضعیت دکمه، دوباره از نظر دسترسی بررسی می‌شود.")
-    markup = group_panel_keyboard(chat_id, user_id)
+    settings = get_group_settings(chat_id)
+    if section not in {"home", *GROUP_PANEL_SECTIONS.keys()}:
+        section = "home"
+    GROUP_PANEL_PAGES[(int(chat_id), int(message_id or 0))] = section
+    if section == "home":
+        heading = "🏠 صفحه اصلی پنل"
+        intro = ("این پنل چندصفحه‌ای است؛ از دسته‌بندی‌ها وارد شو.\n"
+                 "هر گزینهٔ مدیریتی فقط پس از بررسی مجوز مدیر اجرا می‌شود.")
+    else:
+        heading = GROUP_PANEL_SECTIONS[section]["title"]
+        intro = "تنظیمات این بخش را از دکمه‌های زیر مدیریت کن."
+    status = (f"📢 جوین اجباری: {'روشن' if settings.get('force_join_on') else 'خاموش'} | "
+              f"➕ اد اجباری: {'روشن (' + str(settings.get('force_add_count', 3)) + ')' if settings.get('force_add_on') else 'خاموش'}\n")
+    text = ("🛡️ <b>MASIH GUARD S1000+ — پنل مدیریت گروه</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{esc(heading)}</b>\n{intro}\n\n{status}"
+            f"📜 مجوز گروه: {'🟢 فعال' if is_group_licensed(chat_id) else '🟠 غیرفعال؛ بعضی عملیات حفاظتی اجرا نمی‌شوند'}\n"
+            f"👤 دسترسی شما: {'🛠 مدیر گروه' if can_manage else '👁 مشاهده‌گر؛ کنترل‌های مدیریتی قفل هستند'}")
+    markup = group_panel_keyboard(chat_id, user_id, section)
     if message_id is not None:
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            GROUP_PANEL_PAGES[(int(chat_id), int(message_id))] = section
             return
         except Exception as e:
             if "message is not modified" in str(e).lower():
                 return
-    bot.send_message(chat_id, text, reply_markup=markup)
+    sent = bot.send_message(chat_id, text, reply_markup=markup)
+    GROUP_PANEL_PAGES[(int(chat_id), int(sent.message_id))] = section
 
 def send_panel(chat_id, section="home", message_id=None, user_id=None):
     # The menu can be viewed by anyone in private chat; every privileged callback is owner-gated.
@@ -1018,7 +1131,24 @@ def track_group_activity(chat_id, user_id, message_id=None):
         history.append({"message_id": int(message_id), "user_id": int(user_id or 0), "time": time.time()})
         DATA["message_history"][key] = history[-300:]
 
+def target_group_admin_status(chat_id, user_id):
+    """Return True for a confirmed group creator/admin, False for a regular member, None if unknown."""
+    try:
+        member = bot.get_chat_member(int(chat_id), int(user_id))
+        return getattr(member, "status", "") in ("creator", "administrator")
+    except Exception as exc:
+        print("Target role check failed; moderation will fail safe:", repr(exc))
+        return None
+
+
 def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
+    # Never try to auto-ban the group owner/admin. This also prevents the recurring
+    # Telegram error: "Bad Request: can't remove chat owner".
+    role = target_group_admin_status(chat_id, user_id)
+    if role is True:
+        add_log("moderation_skipped_protected", chat_id, user_id, "هدف مدیر/مالک گروه است")
+        save_data()
+        return False
     key=f"{chat_id}:{user_id}"
     DATA["warnings"][key]=int(DATA["warnings"].get(key,0))+1
     count=DATA["warnings"][key]; limit=max(1,int(get_group_settings(chat_id).get("warn_limit",3) or 3))
@@ -1027,17 +1157,194 @@ def warn_member(chat_id, user_id, reason="تخلف از قوانین"):
     except Exception: pass
     add_log("warning",chat_id,user_id,reason)
     if count >= limit:
-        try:
-            bot.ban_chat_member(chat_id,user_id)
-            bot.send_message(chat_id,f"⛔ کاربر <code>{user_id}</code> به سقف اخطار رسید و مسدود شد.")
+        # Re-check role before a destructive action; if Telegram cannot confirm the
+        # role, skip auto-ban rather than risk an unintended moderation action.
+        role = target_group_admin_status(chat_id, user_id)
+        if role is not False:
+            add_log("auto_ban_skipped", chat_id, user_id, "نقش هدف نامشخص است یا هدف مدیر/مالک گروه است")
             DATA["warnings"][key]=0
-        except Exception as e: print("Auto-ban error:",repr(e))
+        else:
+            try:
+                bot.ban_chat_member(chat_id,user_id)
+                bot.send_message(chat_id,f"⛔ کاربر <code>{user_id}</code> به سقف اخطار رسید و مسدود شد.")
+                DATA["warnings"][key]=0
+            except Exception as e:
+                print("Auto-ban error:",repr(e))
+                add_log("auto_ban_failed", chat_id, user_id, str(e)[:160])
     save_data()
+    return True
+
+
+def _force_join_channels(chat_id):
+    """Return the validated required-channel list for a group."""
+    rows = get_group_settings(chat_id).get("force_join_channels", [])
+    result = []
+    if not isinstance(rows, list):
+        return result
+    for row in rows[:10]:
+        if not isinstance(row, dict):
+            continue
+        ident = str(row.get("id", "")).strip()
+        url = str(row.get("url", "")).strip()
+        title = str(row.get("title", ident)).strip()[:80]
+        if ident and url.startswith(("https://t.me/", "http://t.me/")):
+            result.append({"id": ident, "url": url, "title": title or ident})
+    return result
+
+
+def force_join_missing(chat_id, user_id, force_refresh=False):
+    """Fail closed when Telegram cannot verify membership in a required channel."""
+    cache_key = (int(chat_id), int(user_id))
+    cached = FORCE_JOIN_CACHE.get(cache_key)
+    if not force_refresh and cached and cached[0] > time.monotonic():
+        return list(cached[1])
+    missing = []
+    for channel in _force_join_channels(chat_id):
+        try:
+            member = bot.get_chat_member(channel["id"], int(user_id))
+            status = str(getattr(member, "status", "") or "")
+            joined = status in ("creator", "administrator", "member") or (
+                status == "restricted" and bool(getattr(member, "is_member", False))
+            )
+            if not joined:
+                missing.append(channel)
+        except Exception as exc:
+            print("Force-join membership check error:", repr(exc))
+            missing.append(channel)
+    FORCE_JOIN_CACHE[cache_key] = (time.monotonic() + 8, list(missing))
+    return missing
+
+
+def force_join_markup(chat_id, user_id, missing=None):
+    missing = _force_join_channels(chat_id) if missing is None else missing
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for channel in missing[:10]:
+        kb.add(types.InlineKeyboardButton("📢 عضویت در " + channel["title"][:45], url=channel["url"]))
+    kb.add(types.InlineKeyboardButton("🔄 بررسی عضویت", callback_data=f"forcejoin:check:{int(chat_id)}:{int(user_id)}"))
+    return kb
+
+
+def force_add_count(chat_id, user_id):
+    group_rows = DATA.setdefault("force_add_credits", {}).get(str(chat_id), {})
+    invited = group_rows.get(str(user_id), []) if isinstance(group_rows, dict) else []
+    return len(set(str(x) for x in invited if str(x) != str(user_id)))
+
+
+def track_force_invite_link(chat_id, user_id):
+    """Create or reuse a personal invite link so only attributable joins are counted."""
+    try:
+        for existing_link, record in DATA.setdefault("force_invite_links", {}).items():
+            if isinstance(record, dict) and int(record.get("chat_id", 0)) == int(chat_id) and int(record.get("inviter_id", 0)) == int(user_id):
+                return existing_link, None
+        member = bot.get_chat_member(chat_id, bot.get_me().id)
+        if getattr(member, "status", "") not in ("administrator", "creator") or not bool(getattr(member, "can_invite_users", False)):
+            return None, "ربات باید مدیر گروه با مجوز «دعوت کاربران» باشد."
+        invite = bot.create_chat_invite_link(chat_id, name=f"MG:{int(user_id)}", creates_join_request=False)
+        link = str(getattr(invite, "invite_link", "") or "")
+        if not link:
+            return None, "تلگرام لینک دعوت برنگرداند."
+        DATA.setdefault("force_invite_links", {})[link] = {
+            "chat_id": int(chat_id), "inviter_id": int(user_id), "created_at": now_text()
+        }
+        save_data()
+        return link, None
+    except Exception as exc:
+        print("Create force invite link error:", repr(exc))
+        return None, "ساخت لینک دعوت ناموفق بود؛ دسترسی مدیر ربات و تنظیمات گروه را بررسی کن."
+
+
+@bot.chat_member_handler()
+def force_add_chat_member_tracker(update):
+    """Credit only joins made through a personal link created by /mylink."""
+    try:
+        chat_id = int(update.chat.id)
+        old_member = getattr(update, "old_chat_member", None)
+        new_member = getattr(update, "new_chat_member", None)
+        old_status = str(getattr(old_member, "status", "") or "")
+        new_status = str(getattr(new_member, "status", "") or "")
+        invite_obj = getattr(update, "invite_link", None)
+        link = str(getattr(invite_obj, "invite_link", "") or "")
+        if new_status not in ("member", "administrator", "creator") or old_status in ("member", "administrator", "creator"):
+            return
+        tracked = DATA.setdefault("force_invite_links", {}).get(link)
+        if not isinstance(tracked, dict) or int(tracked.get("chat_id", 0)) != chat_id:
+            return
+        inviter = int(tracked.get("inviter_id", 0) or 0)
+        joined_user_obj = getattr(new_member, "user", None)
+        joined_user = int(getattr(joined_user_obj, "id", 0) or 0)
+        if not inviter or not joined_user or joined_user == inviter:
+            return
+        credits = DATA.setdefault("force_add_credits", {}).setdefault(str(chat_id), {})
+        invited = credits.setdefault(str(inviter), [])
+        if str(joined_user) not in {str(x) for x in invited}:
+            invited.append(str(joined_user))
+            credits[str(inviter)] = invited[-1000:]
+            add_log("force_add_credit", chat_id, inviter, f"invited_user={joined_user}")
+            save_data()
+    except Exception as exc:
+        print("Force-add invite tracking error:", repr(exc))
+
+
+
+def entry_gate_notice_allowed(chat_id, user_id):
+    key = (int(chat_id), int(user_id))
+    now = time.monotonic()
+    expiry = ENTRY_GATE_NOTICE_CACHE.get(key, 0)
+    if expiry > now:
+        return False
+    ENTRY_GATE_NOTICE_CACHE[key] = now + 10
+    if len(ENTRY_GATE_NOTICE_CACHE) > 5000:
+        for old_key, old_expiry in list(ENTRY_GATE_NOTICE_CACHE.items()):
+            if old_expiry <= now:
+                ENTRY_GATE_NOTICE_CACHE.pop(old_key, None)
+    return True
+
+
+def enforce_group_entry_gates(message):
+    """Enforce configured join/add requirements before ordinary group commands run."""
+    chat, user = message.chat, message.from_user
+    if not user or chat.type not in ("group", "supergroup"):
+        return False
+    if not is_group_licensed(chat.id):
+        return False
+    settings = get_group_settings(chat.id)
+    if not settings.get("force_join_on") and not settings.get("force_add_on"):
+        return False
+    role = group_admin_status(chat.id, user.id)
+    if role is True or role is None:
+        return False
+    if settings.get("force_join_on"):
+        missing = force_join_missing(chat.id, user.id)
+        if missing:
+            safe_delete(message)
+            if entry_gate_notice_allowed(chat.id, user.id):
+                try:
+                    name = esc(getattr(user, "first_name", "") or "عضو")
+                    bot.send_message(chat.id, f"🔒 {name}، برای ارسال پیام ابتدا عضو کانال‌های لازم شو و «بررسی عضویت» را بزن.", reply_markup=force_join_markup(chat.id, user.id, missing))
+                except Exception as exc:
+                    print("Force-join prompt error:", repr(exc))
+            return True
+    if settings.get("force_add_on"):
+        required = max(1, min(100, int(settings.get("force_add_count", 3) or 3)))
+        actual = force_add_count(chat.id, user.id)
+        if actual < required:
+            safe_delete(message)
+            if entry_gate_notice_allowed(chat.id, user.id):
+                try:
+                    bot.send_message(chat.id, f"➕ برای ارسال پیام، باید {required} عضو معتبر دعوت کنی. دعوت ثبت‌شده: {actual}. لینک اختصاصی خودت را با /mylink بگیر.")
+                except Exception as exc:
+                    print("Force-add prompt error:", repr(exc))
+            return True
+    return False
+
 
 def process_group_security(message):
     chat,user=message.chat,message.from_user
     if not user or chat.type not in ("group","supergroup"): return False
     s=get_group_settings(chat.id)
+    gate_admin_status = group_admin_status(chat.id, user.id)
+    if gate_admin_status is True or gate_admin_status is None:
+        return False
     if not DATA.get("settings", {}).get("smart_security", True) or not s.get("smart_security", True): return False
     if str(user.id) in {str(x) for x in s.get("whitelist", [])}: return False
     admin_status = group_admin_status(chat.id, user.id)
@@ -1221,10 +1528,10 @@ def _strip_group_bot_prefix(text):
     if not value:
         return value
     # Accept an explicit bot mention at the beginning, e.g. @MasihGuard قفل لینک.
-    value = re.sub(r"^@[A-Za-z0-9_]{4,}(?:\s+|[,،:؛-]+)?", "", value, count=1)
+    value = re.sub(r"^@[A-Za-z0-9_]{4,}(?:\s+|[،:؛-]+)?", "", value, count=1)
     # Accept Persian and Latin wake words only at the start; never strip words mid-sentence.
     value = re.sub(
-        r"^(?:(?:ربات|هوش(?:\s*مصنوعی)?|دستیار|مسیح\s*گارد|ماسیح\s*گارد|ماسح\s*گارد|masih\s*guard|masihguard))\s*[,،:؛-]?\s*",
+        r"^(?:(?:ربات|هوش(?:\s*مصنوعی)?|دستیار|مسیح\s*گارد|ماسیح\s*گارد|ماسح\s*گارد|masih\s*guard|masihguard))\s*[،:؛-]?\s*",
         "", value, count=1, flags=re.IGNORECASE
     )
     return value.strip()
@@ -1311,7 +1618,7 @@ def _handle_group_shortcut(message, text):
         setting_action = command[4:]
         enabled = setting_action.endswith("_on")
         setting = setting_action[:-3] if enabled else setting_action[:-4]
-        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "welcome_on", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "lock_mentions", "lock_hashtags", "lock_usernames", "phone_filter"}
+        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "lock_mentions", "lock_hashtags", "lock_usernames", "phone_filter"}
         if setting not in allowed_settings:
             bot.reply_to(message, "⚠️ این تنظیم شناخته نشد.")
             return True
@@ -1358,6 +1665,14 @@ def _handle_group_shortcut(message, text):
             bot.reply_to(message, "برای هدف‌گرفتن کاربر، روی یکی از پیام‌های او ریپلای کن.")
             return True
     try:
+        if command in {"ban", "mute", "kick", "warn"}:
+            target_role = target_group_admin_status(chat_id, int(target))
+            if target_role is True:
+                bot.reply_to(message, "⛔ برای امنیت، مالک و مدیران گروه از این عملیات مستثنا هستند.")
+                return True
+            if target_role is None:
+                bot.reply_to(message, "⚠️ نقش کاربر از تلگرام تأیید نشد؛ عملیات برای جلوگیری از اقدام اشتباه انجام نشد.")
+                return True
         if command == "ban":
             bot.ban_chat_member(chat_id, int(target)); bot.reply_to(message, f"⛔ کاربر <code>{target}</code> مسدود شد.")
         elif command == "unban":
@@ -1497,6 +1812,9 @@ def handle_ai_group_management(message, text=None):
             break
     if not target_setting:
         return False
+    if target_setting == "welcome_on":
+        bot.reply_to(message, "👋 خوشامدگویی این گروه قابلیت پایهٔ MASIH GUARD است و همیشه فعال می‌ماند؛ برای آن دکمهٔ خاموش‌کردن وجود ندارد.")
+        return True
     off_words = ("خاموش", "غیرفعال", "بازکن", "بردار", "غیرفعالشکن", "خاموششکن")
     on_words = ("روشن", "فعال", "ببند", "قفلکن", "فعال‌شکن")
     is_off = any(word in normalized for word in off_words)
@@ -1544,8 +1862,27 @@ def group_message_handler(message):
         # Group creator/admin commands may be written naturally with or without addressing the bot.
         command_text = _strip_group_bot_prefix(text)
         first_token = normalized_text.split(maxsplit=1)[0] if normalized_text else ""
+        if first_token.split("@", 1)[0] == "/mylink":
+            uid = getattr(getattr(message, "from_user", None), "id", 0)
+            if not is_group_licensed(message.chat.id):
+                bot.reply_to(message, "⚠️ برای استفاده از لینک دعوت اختصاصی، مجوز گروه باید فعال باشد.")
+                return
+            if not get_group_settings(message.chat.id).get("force_add_on"):
+                bot.reply_to(message, "ℹ️ اد اجباری در این گروه خاموش است.")
+                return
+            link, error = track_force_invite_link(message.chat.id, uid)
+            if error:
+                bot.reply_to(message, "⚠️ " + esc(error))
+            else:
+                cfg = get_group_settings(message.chat.id)
+                required = max(1, min(100, int(cfg.get("force_add_count", 3) or 3)))
+                current = force_add_count(message.chat.id, uid)
+                bot.reply_to(message, "🔗 لینک دعوت اختصاصی شما:\n" + esc(link) + f"\n📊 دعوت ثبت‌شده: {current}/{required}\nدعوت‌ها فقط وقتی شمرده می‌شوند که عضو جدید با همین لینک وارد شود.")
+            return
         if first_token.split("@", 1)[0] == "/start":
             bot.reply_to(message, group_start_guide(getattr(message.chat, "title", "گروه")))
+            return
+        if enforce_group_entry_gates(message):
             return
         if re.sub(r"[\s‌]+", "", normalized_text) in {"پنل", "پنلمدیریت", "تنظیماتگروه", "panel", "settings", "پنلگروه"}:
             uid = getattr(getattr(message, "from_user", None), "id", 0)
@@ -1837,25 +2174,37 @@ def group_message_handler(message):
     except Exception as e: print("Group handler error:",repr(e))
 
 def welcome_card(chat_id, member):
+    """Build a fresh welcome card using the current group title and configured local timezone."""
     try:
         count = bot.get_chat_member_count(chat_id)
-    except Exception: count = "نامشخص"
-    stamp = datetime.now()
+    except Exception:
+        count = "نامشخص"
+    try:
+        # Fetch fresh chat metadata on every welcome so renamed groups show the new title.
+        chat = bot.get_chat(chat_id)
+        group_title = getattr(chat, "title", None) or "گروه"
+    except Exception:
+        group_title = "گروه"
+    stamp = local_now()
     raw_name = member.first_name or "دوست عزیز"
     name = f'<a href="tg://user?id={int(member.id)}">{esc(raw_name)}</a>'
-    uname = ("@" + esc(member.username)) if getattr(member,"username",None) else "ندارد"
-    return ("⚡ <b>MASIH GUARD</b> ⚡\n"
+    uname = ("@" + esc(member.username)) if getattr(member, "username", None) else "ندارد"
+    date_text = persian_digits(stamp.strftime("%Y-%m-%d"))
+    time_text = persian_digits(stamp.strftime("%H:%M:%S"))
+    count_text = persian_digits(count) if isinstance(count, int) else str(count)
+    return ("⚡ <b>ＭＡＳＩＨ ＧＵＡＲＤ S1000+</b> ⚡\n"
             "━━━━━━━━━━━━━━━━━━\n"
+            f"🏷️ <b>گروه:</b> {esc(group_title)}\n"
             "🚀 <b>عضو جدید وارد شد!</b>\n\n"
             f"👤 <b>نام کاربر:</b> {name}\n"
-            f"🆔 <b>آیدی:</b> <code>{member.id}</code>\n"
+            f"🆔 <b>آیدی:</b> <code>{int(member.id)}</code>\n"
             f"🔖 <b>شناسه:</b> {uname}\n"
-            f"📅 <b>تاریخ ورود:</b> {stamp.strftime('%Y-%m-%d')}\n"
-            f"🕒 <b>ساعت ورود:</b> {stamp.strftime('%H:%M:%S')}\n"
-            f"👥 <b>تعداد اعضا:</b> {count}\n\n"
-            "🛡️ <b>امنیت گروه فعال است</b>\n"
+            f"📅 <b>تاریخ ورود:</b> {date_text}\n"
+            f"🕒 <b>ساعت ورود:</b> {time_text}\n"
+            f"👥 <b>تعداد اعضا:</b> {count_text}\n\n"
+            "🛡️ <b>سامانهٔ امنیت گروه فعال است</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "<i>ساخته‌شده با MASIH GUARD S1000+</i>")
+            "<i>قدرت مدیریت گروه با MASIH GUARD S1000+</i>")
 
 
 @bot.my_chat_member_handler()
@@ -1928,32 +2277,33 @@ def welcome_new_members(message):
         gs["joins"]=int(gs.get("joins",0))+1
         DATA.setdefault("active_members",{}).setdefault(str(message.chat.id),{})[str(member.id)]=time.time()
         add_log("new_member",message.chat.id,member.id,"ورود به گروه")
-        if s.get("welcome_on"):
-            try:
-                # Use the approved cyber-style card while preserving a custom welcome message if configured.
-                custom=s.get("welcome_text","سلام {name}، به گروه خوش آمدی!")
-                if custom and custom != DEFAULT_GROUP["welcome_text"]:
-                    text=esc(custom).replace("{name}",f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست عزیز")}</a>')
-                    kb=types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
-                    final_text=welcome_card(message.chat.id,member)+"\n\n"+text
-                    image_url=s.get("welcome_image","")
-                    if image_url:
-                        sent=bot.send_photo(message.chat.id,image_url,caption=welcome_card(message.chat.id,member)[:1000],reply_markup=kb)
-                        bot.send_message(message.chat.id,text[:3500])
-                    else:
-                        sent=bot.send_message(message.chat.id,final_text,reply_markup=kb)
+        # Welcome is a mandatory core feature; it is intentionally not controlled by a panel toggle.
+        try:
+            # Build once per join; title is fetched live so group renames are reflected.
+            card = welcome_card(message.chat.id, member)
+            custom=s.get("welcome_text","سلام {name}، به گروه خوش آمدی!")
+            if custom and custom != DEFAULT_GROUP["welcome_text"]:
+                text=esc(custom).replace("{name}",f'<a href="tg://user?id={int(member.id)}">{esc(member.first_name or "دوست عزیز")}</a>')
+                kb=types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
+                final_text=card+"\n\n"+text
+                image_url=s.get("welcome_image","")
+                if image_url:
+                    sent=bot.send_photo(message.chat.id,image_url,caption=card[:1000],reply_markup=kb)
+                    bot.send_message(message.chat.id,text[:3500])
                 else:
-                    kb=types.InlineKeyboardMarkup()
-                    kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
-                    image_url=s.get("welcome_image","")
-                    sent=bot.send_photo(message.chat.id,image_url,caption=welcome_card(message.chat.id,member)[:1024],reply_markup=kb) if image_url else bot.send_message(message.chat.id,welcome_card(message.chat.id,member),reply_markup=kb)
-                delete_after=int(s.get("welcome_delete_seconds",0) or 0)
-                if delete_after>0:
-                    def _delete_welcome(cid=message.chat.id, mid=sent.message_id):
-                        try: bot.delete_message(cid,mid)
-                        except Exception as delete_error: print("Welcome auto-delete error:",repr(delete_error))
-                    timer=threading.Timer(delete_after,_delete_welcome); timer.daemon=True; timer.start()
-            except Exception as e: print("Welcome error:",repr(e))
+                    sent=bot.send_message(message.chat.id,final_text,reply_markup=kb)
+            else:
+                kb=types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("📜 مشاهده قوانین گروه", callback_data=f"group_rules:{message.chat.id}"))
+                image_url=s.get("welcome_image","")
+                sent=bot.send_photo(message.chat.id,image_url,caption=card[:1024],reply_markup=kb) if image_url else bot.send_message(message.chat.id,card,reply_markup=kb)
+            delete_after=int(s.get("welcome_delete_seconds",0) or 0)
+            if delete_after>0:
+                def _delete_welcome(cid=message.chat.id, mid=sent.message_id):
+                    try: bot.delete_message(cid,mid)
+                    except Exception as delete_error: print("Welcome auto-delete error:",repr(delete_error))
+                timer=threading.Timer(delete_after,_delete_welcome); timer.daemon=True; timer.start()
+        except Exception as e: print("Welcome error:",repr(e))
     save_data()
 
 @bot.message_handler(content_types=["left_chat_member"], func=lambda m: m.chat.type in ("group","supergroup"))
@@ -2034,8 +2384,11 @@ def ask_ai(question):
 
 def stats_text():
     s=DATA["stats"]
-    return (f"📊 <b>آمار {BRAND}</b>\n━━━━━━━━━━━━━━━━━━\n💬 پیام‌ها: {s['messages']}\n"
-            f"🚫 حذف‌شده‌ها: {s['blocked']}\n⚠️ اخطارها: {s['warns']}\n👥 ورود اعضا: {s['joins']}\n"
+    return (f"📊 <b>آمار {BRAND}</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"👤 کاربران یکتای استارت‌زده: {int(s.get('users_started', 0)):,}\n"
+            f"🚀 مجموع دفعات /start: {int(s.get('start_commands', 0)):,}\n"
+            f"💬 پیام‌ها: {s['messages']}\n🚫 حذف‌شده‌ها: {s['blocked']}\n"
+            f"⚠️ اخطارها: {s['warns']}\n👥 ورود اعضا: {s['joins']}\n"
             f"🎫 تیکت‌ها: {s['tickets']}\n💼 مشتریان: {len(DATA['customers'])}")
 
 def create_ticket(uid, username, text):
@@ -2093,6 +2446,12 @@ def send_backup(chat_id):
 def moderate_member(action,chat_id,user_id):
     group_key=str(chat_id); member_key=str(user_id)
     listing=DATA.setdefault("moderation_lists",{}).setdefault(group_key,{"banned":[],"muted":[]})
+    if action in {"ban", "kick", "mute", "warn"}:
+        role = target_group_admin_status(chat_id, user_id)
+        if role is True:
+            return "⛔ برای امنیت، مالک و مدیران گروه از این عملیات مستثنا هستند."
+        if role is None:
+            return "⚠️ نقش کاربر از تلگرام تأیید نشد؛ برای جلوگیری از اقدام اشتباه، عملیات انجام نشد."
     if action=="warn": warn_member(chat_id,user_id,"اخطار مدیر"); return "⚠️ اخطار ثبت شد."
     if action=="ban":
         bot.ban_chat_member(chat_id,user_id)
@@ -2236,7 +2595,14 @@ def handle_show(uid, action):
 def start_command(message):
     uid=message.from_user.id if message.from_user else 0
     if message.chat.type=="private":
-        ensure_user(uid,message.from_user.username,message.from_user.first_name)
+        user_record = ensure_user(uid, message.from_user.username, message.from_user.first_name)
+        with LOCK:
+            DATA["stats"]["start_commands"] = int(DATA["stats"].get("start_commands", 0)) + 1
+            if not user_record.get("start_seen", False):
+                user_record["start_seen"] = True
+                user_record["first_start"] = now_text()
+                DATA["stats"]["users_started"] = int(DATA["stats"].get("users_started", 0)) + 1
+            save_data()
         args=(message.text or "").split(maxsplit=1)
         if len(args)>1: apply_referral(uid,args[1].strip())
         markup = owner_start_keyboard() if is_owner(uid) else public_keyboard()
@@ -2330,6 +2696,8 @@ def help_command(message):
             "🧰 <b>عمومی:</b> «پنل»، «راهنما»، «قوانین»، «آمار»، «آیدی»، «پینگ»\n"
             "👮 <b>مدیریت عضو:</b> روی پیام عضو ریپلای کن و سپس «اخطار»، «سکوت»، «رفع سکوت»، «بن»، «رفع بن» یا «اخراج» را بنویس.\n"
             "🛡️ <b>امنیت:</b> «قفل لینک»، «قفل تبلیغ»، «ضد اسپم روشن»، «ضدتکرار روشن»، «قفل فوروارد» و فرمان‌های پشتیبانی‌شدهٔ مشابه.\n"
+            "📢 <b>جوین اجباری:</b> مدیر از پنل گروه، کانال‌های لازم را تنظیم می‌کند؛ عضو باید عضو همهٔ کانال‌ها شود و «بررسی عضویت» را بزند.\n"
+            "➕ <b>اد اجباری:</b> اگر روشن باشد، عضو با /mylink لینک اختصاصی می‌گیرد؛ فقط ورودهای ثبت‌شده با آن لینک شمرده می‌شوند.\n"
             "🧠 برای پرسش، بنویس «ربات [سؤالت]». برای فهرست بیشتر بنویس «دستورات کامل».\n\n"
             "🔒 فرمان مدیریتی فقط با مجوز مدیر گروه و دسترسی لازم ربات اجرا می‌شود؛ بعضی قابلیت‌ها به مجوز نصب وابسته‌اند.")
     else:
@@ -2352,6 +2720,8 @@ def help_command(message):
             "• <code>/panel</code> — پنل مالک (فقط مالک اصلی) یا پنل گروه در گروه\n\n"
             "💳 <b>منوی کاربری:</b> کیف پول، خرید اشتراک، زیرمجموعه‌گیری، تراکنش‌ها، درخواست برداشت، تیکت پشتیبانی و هوش مصنوعی.\n"
             "👥 <b>در گروه:</b> «پنل»، «راهنما»، «قوانین»، «آمار»، «دستورات کامل» و فرمان‌های مدیریتی پشتیبانی‌شده.\n"
+            "📢 <b>جوین اجباری:</b> از پنل گروه کانال‌ها را تنظیم کن؛ عضویت هر کاربر با Telegram بررسی می‌شود.\n"
+            "➕ <b>اد اجباری:</b> تعداد دعوت را تنظیم کن؛ کاربران باید در گروه /mylink بزنند تا لینک شخصی بگیرند.\n"
             "🔒 امکانات وابسته به مجوز نصب، تنظیمات سرویس و دسترسی‌های تلگرام هستند.",
             reply_markup=public_keyboard())
 
@@ -2435,6 +2805,30 @@ def game_command(message):
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
+        if data.startswith("forcejoin:check:"):
+            parts = data.split(":")
+            if len(parts) != 4:
+                bot.answer_callback_query(call.id, "دکمه نامعتبر است.", show_alert=True); return
+            try:
+                target_chat, target_user = int(parts[2]), int(parts[3])
+            except ValueError:
+                bot.answer_callback_query(call.id, "دکمه نامعتبر است.", show_alert=True); return
+            if int(uid) != target_user:
+                bot.answer_callback_query(call.id, "این دکمه برای عضو دیگری است.", show_alert=True); return
+            missing = force_join_missing(target_chat, target_user, force_refresh=True)
+            if missing:
+                bot.answer_callback_query(call.id, "هنوز عضویت همه کانال‌ها تأیید نشده؛ اگر عضو شدی چند ثانیه بعد دوباره بزن.", show_alert=True)
+                try:
+                    bot.edit_message_reply_markup(target_chat, call.message.message_id, reply_markup=force_join_markup(target_chat, target_user, missing))
+                except Exception:
+                    pass
+            else:
+                bot.answer_callback_query(call.id, "عضویت تأیید شد؛ حالا می‌توانی پیام بدهی.")
+                try:
+                    bot.edit_message_text("✅ عضویت شما تأیید شد. حالا می‌توانی در گروه پیام بدهی.", target_chat, call.message.message_id, reply_markup=None)
+                except Exception:
+                    pass
+            return
         if data.startswith("captcha:"):
             if not call.message or call.message.chat.type not in ("group", "supergroup"):
                 bot.answer_callback_query(call.id, "این تأیید فقط داخل گروه انجام می‌شود.", show_alert=True); return
@@ -2484,6 +2878,76 @@ def callback_handler(call):
             if not call.message or call.message.chat.type not in ("group", "supergroup"):
                 bot.answer_callback_query(call.id, "این پنل فقط داخل گروه کار می‌کند.", show_alert=True)
                 return
+            if data.startswith("gpanel:page:"):
+                section = data.split(":", 2)[2]
+                bot.answer_callback_query(call.id)
+                send_group_panel(chat_id, call.message.message_id, user_id=uid, section=section)
+                return
+            if data.startswith("gpanel:ask:"):
+                if not is_group_admin(chat_id, uid):
+                    bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه مجاز است.", show_alert=True)
+                    return
+                action = data.split(":", 2)[2]
+                allowed_actions = {"warn_limit", "quiet_hours", "welcome_text", "farewell_text",
+                                   "rules", "welcome_image", "welcome_delete_seconds",
+                                   "auto_reply", "delete_reply", "bad_word", "add_custom_command",
+                                   "delete_custom_command", "add_note", "delete_note"}
+                if action not in allowed_actions:
+                    bot.answer_callback_query(call.id, "این تنظیم از پنل پشتیبانی نمی‌شود.", show_alert=True)
+                    return
+                WAITING[uid] = {"action": action, "chat_id": int(chat_id)}
+                prompts = {
+                    "warn_limit": "سقف اخطار را از ۱ تا ۲۰ بفرست.",
+                    "quiet_hours": "بازهٔ سکوت را مثل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.",
+                    "welcome_text": "متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.",
+                    "farewell_text": "متن خداحافظی را بفرست؛ می‌توانی {name} بگذاری.",
+                    "rules": "قوانین جدید گروه را بفرست.",
+                    "welcome_image": "لینک مستقیم تصویر HTTPS را بفرست؛ برای حذف بنویس حذف.",
+                    "welcome_delete_seconds": "زمان حذف خوشامد را به ثانیه بفرست (۰ تا ۳۶۰۰).",
+                    "auto_reply": "قالب: کلمه کلیدی | متن پاسخ",
+                    "delete_reply": "کلمه کلیدی پاسخ خودکار را بفرست.",
+                    "bad_word": "کلمه یا عبارت ممنوع را بفرست.",
+                    "add_custom_command": "قالب: نام فرمان بدون ! | متن پاسخ",
+                    "delete_custom_command": "نام فرمان سفارشی را بفرست.",
+                    "add_note": "قالب: نام کوتاه | متن یادداشت",
+                    "delete_note": "نام یادداشت را بفرست."
+                }
+                bot.answer_callback_query(call.id, "ادامه تنظیم در پیام خصوصی")
+                try:
+                    bot.send_message(uid, f"⚙️ تنظیم گروه <code>{chat_id}</code>\n{prompts[action]}")
+                except Exception:
+                    bot.send_message(chat_id, "برای تنظیم، ابتدا ربات را در خصوصی باز کن و /start بزن.", reply_to_message_id=call.message.message_id)
+                return
+            if data == "gpanel:mylink":
+                bot.answer_callback_query(call.id)
+                bot.send_message(chat_id, "برای دریافت لینک دعوت اختصاصی، دستور /mylink را در همین گروه بفرست.")
+                return
+            if data == "gpanel:settings":
+                bot.answer_callback_query(call.id)
+                cfg = get_group_settings(chat_id)
+                labels = {"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم",
+                           "anti_repeat":"ضد تکرار","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه",
+                           "lock_mentions":"قفل منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری",
+                           "phone_filter":"فیلتر شماره","welcome_on":"خوشامد","farewell_on":"خداحافظی",
+                           "captcha_on":"کپچا","anti_raid_on":"ضد یورش","smart_security":"امنیت هوشمند",
+                           "force_join_on":"جوین اجباری","force_add_on":"اد اجباری"}
+                body = "\n".join(f"• {label}: {'روشن' if cfg.get(key) else 'خاموش'}" for key,label in labels.items())
+                bot.send_message(chat_id, "⚙️ <b>وضعیت تنظیمات گروه</b>\n" + body)
+                return
+            if data == "gpanel:commands":
+                bot.answer_callback_query(call.id)
+                bot.send_message(chat_id, "📚 <b>فرمان‌های مهم</b>\n"
+                    "/panel — پنل گروه\n/mylink — لینک دعوت اختصاصی (اگر اد اجباری فعال باشد)\n"
+                    "/rules — قوانین (در صورت پشتیبانی نسخه)\n/id — شناسه\n/help — راهنما\n"
+                    "فرمان‌های مدیریتی فقط با مجوز مناسب اجرا می‌شوند.")
+                return
+            if data == "gpanel:health":
+                bot.answer_callback_query(call.id)
+                bot.send_message(chat_id, "🧪 <b>سلامت پایه</b>\n"
+                    f"نسخه: {BRAND} {VERSION}\n"
+                    f"مجوز گروه: {'فعال' if is_group_licensed(chat_id) else 'غیرفعال'}\n"
+                    "این بررسی، اتصال API و مجوزهای ربات را تضمین نمی‌کند؛ برای آن لاگ هاست را هم بررسی کن.")
+                return
             if data == "gpanel:locked":
                 bot.answer_callback_query(call.id, "🔒 این دکمه برای مشاهده‌گرها قفل است؛ مدیر گروه می‌تواند از آن استفاده کند.", show_alert=True)
                 return
@@ -2513,14 +2977,27 @@ def callback_handler(call):
                 return
             if data == "gpanel:refresh":
                 bot.answer_callback_query(call.id)
-                send_group_panel(chat_id, call.message.message_id, user_id=uid)
+                current_section = GROUP_PANEL_PAGES.get((int(chat_id), int(call.message.message_id)), "home")
+                send_group_panel(chat_id, call.message.message_id, user_id=uid, section=current_section)
                 return
             if not is_group_admin(chat_id, uid):
                 bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه یا مالک اجازه تغییر تنظیمات دارد.", show_alert=True)
                 return
+            if data in {"gpanel:configure_force_join", "gpanel:configure_force_add"}:
+                action = "force_join" if data.endswith("force_join") else "force_add"
+                WAITING[uid] = {"action": action, "chat_id": int(chat_id)}
+                prompt = ("هر کانال را در یک خط بفرست: @channel | https://t.me/channel | نام نمایشی. حداکثر ۱۰ کانال؛ برای خاموش‌کردن بنویس خاموش."
+                          if action == "force_join" else
+                          "تعداد دعوت معتبر لازم را از ۱ تا ۱۰۰ بفرست. اعضا باید در گروه /mylink بزنند؛ برای خاموش‌کردن بنویس خاموش.")
+                bot.answer_callback_query(call.id, "ادامه تنظیم در پیام خصوصی")
+                try:
+                    bot.send_message(uid, "⚙️ تنظیمات گروه " + str(chat_id) + "\n" + prompt)
+                except Exception:
+                    bot.send_message(chat_id, "برای ادامهٔ تنظیمات، ابتدا ربات را در خصوصی باز کن و /start بزن.", reply_to_message_id=call.message.message_id)
+                return
             if data.startswith("gpanel:toggle:"):
                 key = data.split(":", 2)[2]
-                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "welcome_on", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
+                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
                 if key not in allowed:
                     bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
                     return
@@ -2536,7 +3013,8 @@ def callback_handler(call):
                 settings[key] = next_enabled
                 save_data()
                 bot.answer_callback_query(call.id, "روشن شد." if settings[key] else "خاموش شد.")
-                send_group_panel(chat_id, call.message.message_id, user_id=uid)
+                current_section = GROUP_PANEL_PAGES.get((int(chat_id), int(call.message.message_id)), "home")
+                send_group_panel(chat_id, call.message.message_id, user_id=uid, section=current_section)
                 return
         management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
         if management_action:
@@ -2687,7 +3165,7 @@ def callback_handler(call):
                     "remove_bot_admin":"نام کاربری ادمینی را که می‌خواهی دسترسی‌اش حذف شود با @ بفرست؛ نمونه: @username"
                 }
                 bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
-            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds"}
+            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","force_join","force_add"}
             if action in group_actions:
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
@@ -2855,8 +3333,23 @@ def private_text_handler(message):
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
                 "public_features","channel_url","website_url","referral_reward_toman","subscription_packages","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
                 "welcome_text","farewell_text","rules","auto_reply","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","show_notes_group","register_bot_admin","remove_bot_admin"}
+    # These actions are owner-only when launched from the owner's private panel,
+    # but group administrators may configure the group they administer through
+    # the group panel. The target chat ID is stored in WAITING and re-verified.
+    group_admin_waiting_actions = {
+        "delete_reply", "bad_word", "warn_limit", "add_custom_command", "delete_custom_command",
+        "welcome_text", "farewell_text", "rules", "auto_reply", "add_note", "delete_note",
+        "quiet_hours", "welcome_image", "welcome_delete_seconds", "warn", "mute", "unmute",
+        "ban", "unban", "kick", "show_list_group", "show_rules_group", "show_notes_group"
+    }
     if action in owner_only and not is_owner(uid):
-        WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
+        group_scoped = False
+        try:
+            group_scoped = int(chat_id) < 0 and action in group_admin_waiting_actions
+        except (TypeError, ValueError):
+            group_scoped = False
+        if not group_scoped or not is_group_admin(chat_id, uid):
+            WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک ربات یا مدیر مجاز همان گروه است."); return
     try:
         if action in {"register_bot_admin", "remove_bot_admin"}:
             if not is_owner(uid):
@@ -2995,7 +3488,7 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.","add_note":"قالب: نام کوتاه | متن یادداشت","delete_note":"نام یادداشت را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.","add_note":"قالب: نام کوتاه | متن یادداشت","delete_note":"نام یادداشت را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰).", "force_join":"هر کانال را در یک خط بفرست: @channel | https://t.me/channel | نام نمایشی. برای خاموش‌کردن بنویس خاموش.", "force_add":"تعداد دعوت معتبر لازم را از ۱ تا ۱۰۰ بفرست. برای خاموش‌کردن بنویس خاموش؛ اعضا باید با لینک /mylink دعوت شوند."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
         if action=="whitelist":
             target=int(text)
@@ -3030,6 +3523,61 @@ def private_text_handler(message):
             active=len(DATA.setdefault("active_members",{}).get(str(target),{}))
             bot.send_message(uid, f"📊 <b>آمار گروه</b> <code>{target}</code>\nپیام‌ها: {int(gs.get('messages',0))}\nمسدودشده‌ها: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
             WAITING.pop(uid,None); return
+        if action=="force_join":
+            if not is_group_admin(chat_id, uid):
+                raise PermissionError("فقط مدیر همان گروه می‌تواند جوین اجباری را تغییر دهد.")
+            cfg = get_group_settings(chat_id)
+            if text.casefold() in {"خاموش", "off", "0"}:
+                cfg["force_join_on"] = False
+                for cache_key in list(FORCE_JOIN_CACHE):
+                    if cache_key[0] == int(chat_id): FORCE_JOIN_CACHE.pop(cache_key, None)
+                save_data(); add_log("force_join_disabled", chat_id, uid, "جوین اجباری خاموش شد")
+                bot.send_message(uid, "✅ جوین اجباری برای این گروه خاموش شد.")
+            else:
+                if not bot_has_group_permission(chat_id, "can_delete_messages"):
+                    raise PermissionError("برای اجرای جوین اجباری، ربات باید در گروه مجوز حذف پیام‌ها داشته باشد.")
+                rows = []
+                for line in text.splitlines():
+                    if not line.strip():
+                        continue
+                    parts = [x.strip() for x in line.split("|", 2)]
+                    if len(parts) < 2:
+                        raise ValueError("قالب هر خط: @channel | https://t.me/channel | نام نمایشی")
+                    ident, url = parts[0], parts[1]
+                    title = parts[2] if len(parts) == 3 and parts[2] else ident
+                    if not ident or not url.startswith(("https://t.me/", "http://t.me/")):
+                        raise ValueError("شناسه کانال و لینک معتبر t.me لازم است.")
+                    rows.append({"id": ident, "url": url, "title": title[:80]})
+                    if len(rows) > 10:
+                        raise ValueError("حداکثر ۱۰ کانال می‌توانی تنظیم کنی.")
+                if not rows:
+                    raise ValueError("حداقل یک کانال لازم است.")
+                cfg["force_join_channels"] = rows
+                cfg["force_join_on"] = True
+                for cache_key in list(FORCE_JOIN_CACHE):
+                    if cache_key[0] == int(chat_id): FORCE_JOIN_CACHE.pop(cache_key, None)
+                save_data(); add_log("force_join_configured", chat_id, uid, f"channels={len(rows)}")
+                bot.send_message(uid, "✅ جوین اجباری فعال شد. برای بررسی قابل‌اعتماد، ربات باید در همهٔ کانال‌های تنظیم‌شده مدیر باشد؛ برای کانال خصوصی، شناسهٔ عددی و لینک دعوت معتبر لازم است.\nکانال‌ها:\n" + "\n".join("• " + esc(r["title"]) for r in rows))
+            WAITING.pop(uid, None); return
+        if action=="force_add":
+            if not is_group_admin(chat_id, uid):
+                raise PermissionError("فقط مدیر همان گروه می‌تواند اد اجباری را تغییر دهد.")
+            cfg = get_group_settings(chat_id)
+            if text.casefold() in {"خاموش", "off", "0"}:
+                cfg["force_add_on"] = False
+                save_data(); add_log("force_add_disabled", chat_id, uid, "اد اجباری خاموش شد")
+                bot.send_message(uid, "✅ اد اجباری برای این گروه خاموش شد.")
+            else:
+                if not bot_has_group_permission(chat_id, "can_delete_messages"):
+                    raise PermissionError("برای اجرای اد اجباری، ربات باید در گروه مجوز حذف پیام‌ها داشته باشد.")
+                count = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+                if not 1 <= count <= 100:
+                    raise ValueError("تعداد باید بین ۱ تا ۱۰۰ باشد.")
+                cfg["force_add_count"] = count
+                cfg["force_add_on"] = True
+                save_data(); add_log("force_add_configured", chat_id, uid, f"required={count}")
+                bot.send_message(uid, f"✅ اد اجباری فعال شد: دعوت {count} عضو معتبر لازم است. کاربران باید در گروه /mylink بزنند و عضو جدید با لینک اختصاصی آن‌ها وارد شود. تلگرام دعوت‌های بدون لینک اختصاصی را قابل انتساب قطعی نمی‌کند.")
+            WAITING.pop(uid, None); return
         if action=="quiet_hours":
             s=get_group_settings(chat_id)
             if text.casefold() in {"خاموش","off","0"}:
@@ -3430,7 +3978,7 @@ if __name__ == "__main__":
     except Exception as web_error:
         print("Web server could not start:", repr(web_error))
     try:
-        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25)
+        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
     except Exception as e:
         print("Polling stopped:",repr(e))
         raise
