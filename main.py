@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """MASIH GUARD S1000+ — single-file Telegram group management bot."""
 import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket
@@ -2177,6 +2178,10 @@ def private_text_handler(message):
         bot.send_message(uid,"⚠️ ورودی یا دسترسی معتبر نیست.\n"+esc(str(e)))
     except Exception as e:
         print("Private action error:",repr(e)); bot.send_message(uid,"⚠️ عملیات ناموفق بود؛ دسترسی ربات و اطلاعات واردشده را بررسی کن.")
+
+# Register the group text router after command handlers so /start and /ping keep priority.
+bot.message_handler(content_types=["text"], func=lambda m: getattr(getattr(m, "chat", None), "type", "") in ("group", "supergroup"))(group_message_handler)
+
 
 if __name__ == "__main__":
     print(f"{BRAND} {VERSION}: starting polling")
