@@ -32,7 +32,7 @@ BOT_USERNAME = ""
 BOT_ID = 0
 
 DEFAULT_GROUP = {
-    "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True,
+    "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True, "anti_raid_on": False, "raid_mode_until": 0,
     "anti_forward": False, "media_lock": False, "lock_mentions": False, "lock_hashtags": False, "lock_usernames": False, "welcome_on": True,
     "farewell_on": False, "join_approval": False, "bad_words": [], "whitelist": [],
     "warn_limit": 3, "lock_photos": False, "lock_videos": False, "lock_files": False,
@@ -41,7 +41,7 @@ DEFAULT_GROUP = {
     "welcome_text": "سلام {name}، به گروه خوش آمدی!", "farewell_text": "خداحافظ {name}",
     "auto_replies": {}, "custom_commands": {}, "phone_filter": False,
     "smart_security": True, "quiet_hours_on": False, "quiet_start": "23:00", "quiet_end": "07:00",
-    "welcome_image": "", "welcome_delete_seconds": 0
+    "welcome_image": "", "welcome_delete_seconds": 0, "captcha_on": False, "notes": {}
 }
 DEFAULT_DATA = {
     "groups": {}, "warnings": {}, "logs": [], "proxies": [], "customers": {}, "moderation_lists": {}, "message_history": {},
@@ -54,7 +54,7 @@ DEFAULT_DATA = {
         "referral_reward_toman": 5000,
         "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
-    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {},
+    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {},
     "subscription_requests": {}, "payout_requests": {},
     "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}, "bot_admins": {}
@@ -253,29 +253,6 @@ def configured_url(key, fallback):
     value = str(bot_settings().get(key, "") or fallback).strip()
     return value if value.startswith(("https://", "http://")) else fallback
 
-def get_public_game_url():
-    """Resolve the externally reachable HTTPS URL for the embedded browser game."""
-    direct = (os.getenv("WEB_GAME_URL") or "").strip()
-    if direct.startswith("https://"):
-        return direct.rstrip("/")
-    for name in ("FADEHOST_PUBLIC_URL", "PUBLIC_URL", "APP_URL", "SERVICE_URL", "RENDER_EXTERNAL_URL", "HOST_URL"):
-        base = (os.getenv(name) or "").strip().rstrip("/")
-        if base.startswith("https://"):
-            return base if base.endswith("/game") else base + "/game"
-    return ""
-
-
-def send_game_link(message):
-    """Send the browser-game button in either a group or private chat."""
-    game_url = get_public_game_url()
-    if game_url:
-        game_kb = types.InlineKeyboardMarkup()
-        game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
-        bot.reply_to(message, "🎮 <b>بازی MASIH GUARD • ۵۰ بازی</b>\nبرای ورود به صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
-    else:
-        bot.reply_to(message, "⚠️ صفحهٔ بازی داخل ربات آماده است، اما آدرس عمومی هاست تنظیم نشده. در Environment هاست، متغیر <code>WEB_GAME_URL</code> را با آدرس عمومی سایت به‌همراه <code>/game</code> تنظیم کن.")
-
-
 def is_group_admin(chat_id, user_id):
     if is_owner(user_id): return True
     try: return bot.get_chat_member(chat_id, user_id).status in ("administrator", "creator")
@@ -351,10 +328,10 @@ def section_keyboard(section):
     kb = types.InlineKeyboardMarkup(row_width=1)
     choices = {
       "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist"),
-      ("🧠 امنیت هوشمند این گروه","toggle:group_smart_security"),("🌙 ساعت سکوت شبانه","ask:quiet_hours"),("🆔 شناسه و تنظیمات گروه","ask:group_settings")],
+      ("🧠 امنیت هوشمند این گروه","toggle:group_smart_security"),("🚨 ضد یورش ورود","toggle:anti_raid_on"),("🌙 ساعت سکوت شبانه","ask:quiet_hours"),("🆔 شناسه و تنظیمات گروه","ask:group_settings")],
       "welcome":[("👋 خوشامدگویی","toggle:welcome_on"),("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text"),
-      ("🖼 تنظیم تصویر خوشامد","ask:welcome_image"),("🗑 زمان حذف خوشامد","ask:welcome_delete_seconds")],
-      "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word"),("🧩 افزودن فرمان اختصاصی","ask:add_custom_command"),("🗑 حذف فرمان اختصاصی","ask:delete_custom_command"),("📣 ارسال اطلاعیه","ask:announcement")],
+      ("🖼 تنظیم تصویر خوشامد","ask:welcome_image"),("🗑 زمان حذف خوشامد","ask:welcome_delete_seconds"),("🔐 تأیید عضو جدید (کپچا)","toggle:captcha_on")],
+      "rules":[("📜 مشاهده قوانین","show:rules"),("✏️ تنظیم قوانین","ask:rules"),("💬 افزودن پاسخ خودکار","ask:auto_reply"),("🗑 حذف پاسخ خودکار","ask:delete_reply"),("🚫 افزودن کلمه ممنوع","ask:bad_word"),("🧩 افزودن فرمان اختصاصی","ask:add_custom_command"),("🗑 حذف فرمان اختصاصی","ask:delete_custom_command"),("📝 افزودن یادداشت","ask:add_note"),("🗑 حذف یادداشت","ask:delete_note"),("📋 فهرست یادداشت‌ها","show:notes"),("📣 ارسال اطلاعیه","ask:announcement")],
       "members":[(x, "ask:"+a) for x,a in [("⚠️ اخطار عضو","warn"),("🔇 سکوت عضو","mute"),("🔊 رفع سکوت","unmute"),("⛔ مسدودسازی","ban"),("✅ رفع مسدودی","unban"),("👢 اخراج عضو","kick"), ("🧹 پاک‌کردن اخطارها","clear_warnings"), ("📋 فهرست مسدودها","show:ban_list"), ("🔇 فهرست ساکت‌ها","show:mute_list"), ("🔎 اطلاعات عضو","ask:member_info")]],
       "settings":[("⚙️ تنظیم سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules")],
       "referrals":[("💳 آمار کیف پول تومانی","show:wallet_stats"),("👥 آمار دعوت‌ها","show:referral_stats"),("🛒 درخواست‌های اشتراک","show:subscription_requests"),("💸 درخواست‌های برداشت","show:payout_requests"),("➕ تنظیم موجودی کیف پول","ask:wallet_adjust"),("📦 بسته‌های اشتراک","show:shop")],
@@ -377,7 +354,7 @@ def section_keyboard(section):
         ("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر/گیف","toggle:lock_stickers"),
         ("🎙 قفل ویس","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),
         ("📵 فیلتر شماره تماس","toggle:phone_filter"),("🧠 امنیت هوشمند گروه","toggle:group_smart_security"),
-        ("👋 خوشامدگویی","toggle:welcome_on"),("🌙 خداحافظی","toggle:farewell_on"),
+        ("👋 خوشامدگویی","toggle:welcome_on"),("🌙 خداحافظی","toggle:farewell_on"),("🔐 کپچا","toggle:captcha_on"),("🚨 ضد یورش","toggle:anti_raid_on"),
         ("🛂 تأیید ورود","toggle:join_approval"),("🌙 تنظیم ساعت سکوت","ask:quiet_hours"),
         ("⚙️ سقف اخطار","ask:warn_limit"),("📜 تنظیم قوانین","ask:rules"),
         ("🆔 نمایش تنظیمات یک گروه","ask:group_settings")
@@ -412,7 +389,7 @@ def group_panel_keyboard(chat_id):
     kb = types.InlineKeyboardMarkup(row_width=2)
     labels = [("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
               ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
-              ("👋 خوشامد", "welcome_on"), ("👋 خداحافظی", "farewell_on"),
+              ("👋 خوشامد", "welcome_on"), ("👋 خداحافظی", "farewell_on"), ("🔐 کپچا", "captcha_on"), ("🚨 ضد یورش", "anti_raid_on"),
               ("🖼 قفل رسانه", "media_lock"), ("📵 فیلتر شماره", "phone_filter")]
     for label, key in labels:
         status = "🟢" if settings.get(key, False) else "⚪"
@@ -1463,8 +1440,18 @@ def group_message_handler(message):
         if compact_public in {"آمار", "آمارگروه", "stats"}:
             bot.reply_to(message, f"📊 <b>آمار گروه</b>\n💬 پیام‌ها: {DATA['stats'].get('messages', 0)}\n🚫 موارد مسدودشده: {DATA['stats'].get('blocked', 0)}\n⚠️ اخطارها: {DATA['stats'].get('warns', 0)}")
             return
-        if compact_public in {"بازی", "یهبازی", "بازیها", "game", "play"}:
-            send_game_link(message)
+        if compact_public in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
+            game_url = os.getenv("WEB_GAME_URL", "").strip()
+            if not game_url:
+                base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+                if base_url.startswith("https://"):
+                    game_url = base_url + "/game"
+            if game_url.startswith("https://"):
+                game_kb = types.InlineKeyboardMarkup()
+                game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
+                bot.reply_to(message, "🎮 <b>بازی MASIH GUARD</b>\nبرای باز کردن صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
+            else:
+                bot.reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز از طرف هاست مشخص نشده است. متغیر RENDER_EXTERNAL_URL یا WEB_GAME_URL باید تنظیم باشد.")
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -1613,6 +1600,13 @@ def group_message_handler(message):
         if process_group_security(message): return
         if text:
             settings=get_group_settings(message.chat.id)
+            note_match = re.fullmatch(r"#([\w\u0600-\u06ff-]{1,40})", text.strip())
+            if note_match:
+                note_name = note_match.group(1).lower()
+                note_value = settings.get("notes", {}).get(note_name)
+                if note_value is not None:
+                    bot.reply_to(message, "📝 <b>" + esc(note_name) + "</b>\n" + esc(note_value))
+                    return
             handled=False
             for keyword,reply in settings.get("auto_replies",{}).items():
                 if keyword and keyword.casefold() in text.casefold():
@@ -1674,7 +1668,43 @@ def bot_added_or_removed(update):
 def welcome_new_members(message):
     if not is_group_licensed(message.chat.id): return
     s=get_group_settings(message.chat.id)
+    chat_id = int(message.chat.id)
+    join_key = str(chat_id)
+    now_ts = time.time()
+    join_times = [float(t) for t in DATA.setdefault("join_times", {}).get(join_key, []) if now_ts - float(t) <= 30]
+    join_times.extend([now_ts] * len(message.new_chat_members))
+    DATA.setdefault("join_times", {})[join_key] = join_times[-100:]
+    raid_triggered = bool(s.get("anti_raid_on") and len(join_times) >= 8 and float(s.get("raid_mode_until", 0) or 0) <= now_ts)
+    if raid_triggered:
+        s["raid_mode_until"] = now_ts + 600
+        add_log("anti_raid_triggered", chat_id, 0, f"joins_30s={len(join_times)}; duration=600s")
+        try: bot.send_message(chat_id, "🚨 <b>حالت ضد یورش فعال شد</b>\nورودهای پیاپی شناسایی شد؛ اعضای تازه‌وارد باید تأیید کپچا را انجام دهند. این حالت پس از ۱۰ دقیقه خودکار پایان می‌یابد.")
+        except Exception: pass
+    raid_active = bool(s.get("anti_raid_on") and float(s.get("raid_mode_until", 0) or 0) > now_ts)
+    save_data()
     for member in message.new_chat_members:
+        if s.get("captcha_on") or raid_active:
+            member_id = int(member.id)
+            captcha_key = f"{chat_id}:{member_id}"
+            a, b = random.randint(2, 9), random.randint(1, 9)
+            answer = a + b
+            options = list({answer, answer + random.choice([1, 2]), max(0, answer - random.choice([1, 2]))})
+            while len(options) < 3: options.append(answer + len(options) + 2)
+            random.shuffle(options)
+            try:
+                me = bot.get_me(); bot_member = bot.get_chat_member(chat_id, me.id)
+                if getattr(bot_member, "status", "") == "creator" or bool(getattr(bot_member, "can_restrict_members", False)):
+                    bot.restrict_chat_member(chat_id, member_id, permissions=types.ChatPermissions(can_send_messages=False, can_send_audios=False, can_send_documents=False, can_send_photos=False, can_send_videos=False, can_send_video_notes=False, can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False, can_add_web_page_previews=False))
+                    DATA.setdefault("captchas", {})[captcha_key] = {"answer": answer, "expires": time.time() + 300, "created": now_text()}
+                    save_data()
+                    captcha_kb = types.InlineKeyboardMarkup(row_width=3)
+                    captcha_kb.row(*[types.InlineKeyboardButton(str(value), callback_data=f"captcha:{member_id}:{value}") for value in options])
+                    bot.send_message(chat_id, f"🔐 <b>تأیید ورود</b>\n{esc(member.first_name or 'عضو جدید')}، برای فعال‌شدن امکان ارسال پیام، جواب این سؤال را انتخاب کن: <b>{a} + {b} = ؟</b>\n⏳ اعتبار دکمه‌ها: ۵ دقیقه", reply_markup=captcha_kb)
+                else:
+                    bot.send_message(chat_id, "⚠️ کپچا در تنظیمات روشن است، اما ربات مجوز محدودکردن اعضا ندارد؛ از مدیر بخواه مجوز «محدودکردن اعضا» را فعال کند.")
+            except Exception as captcha_error:
+                DATA.setdefault("captchas", {}).pop(captcha_key, None); save_data()
+                print("Captcha setup error:", repr(captcha_error))
         DATA["stats"]["joins"]+=1
         gs=DATA.setdefault("group_stats",{}).setdefault(str(message.chat.id),{"messages":0,"blocked":0,"joins":0,"leaves":0})
         gs["joins"]=int(gs.get("joins",0))+1
@@ -1881,6 +1911,11 @@ def handle_show(uid, action):
     elif action=="status": bot.send_message(uid,f"🚀 <b>{BRAND} {VERSION}</b>\nربات در حال اجراست.\nهوش مصنوعی: {'تنظیم شده' if AI_API_KEY else 'تنظیم نشده'}")
     elif action=="rules":
         p=WAITING.get(uid,{}); bot.send_message(uid,esc(get_group_settings(p.get("chat_id",uid))["rules"]))
+    elif action=="notes":
+        p=WAITING.get(uid,{})
+        notes=get_group_settings(p.get("chat_id",uid)).get("notes",{})
+        body="\n\n".join(f"<b>#{esc(k)}</b>\n{esc(v)}" for k,v in notes.items())
+        bot.send_message(uid,"📝 <b>یادداشت‌های گروه</b>\n"+(body or "یادداشتی ثبت نشده است."))
     elif action=="proxies":
         bot.send_message(uid,proxy_list_text(limit=20, with_ping=True))
     elif action=="group_licenses":
@@ -1985,21 +2020,162 @@ def ai_command(message):
     try: bot.edit_message_text(esc(answer[:3900]),status.chat.id,status.message_id)
     except Exception: bot.send_message(message.chat.id,esc(answer[:3900]))
 
+@bot.message_handler(commands=["help", "commands"])
+def help_command(message):
+    if getattr(message.chat, "type", "private") in ("group", "supergroup"):
+        bot.reply_to(message, "📚 <b>راهنمای MASIH GUARD</b>\n• پینگ / آیدی / قوانین / آمار\n• برای مدیریت عضو روی پیام او ریپلای کن و بن، سکوت، اخطار یا اخراج را بنویس.\n• برای بازی مرورگری بنویس «بازی».\n• تنظیمات امنیتی فقط با مجوز مدیر گروه و دسترسی لازم ربات اجرا می‌شوند.")
+    else:
+        bot.send_message(message.chat.id, "📚 <b>راهنمای MASIH GUARD S1000+</b>\n/start — منوی اصلی\n/panel — پنل خصوصی مالک (فقط مالک)\n/profile — پروفایل و امتیاز\n/top — جدول امتیازها\n/game — فهرست ۵۰ بازی مرورگری\nبازی — بازی متنی تلگرام\n/stats — آمار ربات\n/ai متن سؤال — دستیار هوشمند\n/cancel — لغو عملیات در انتظار\n/ping — بررسی پاسخ‌گویی\n/id — شناسه کاربر و گفتگو", reply_markup=public_keyboard())
+
+@bot.message_handler(commands=["profile", "me"])
+def profile_command(message):
+    user = getattr(message, "from_user", None)
+    if not user:
+        return
+    uid = int(user.id)
+    profile = ensure_user(uid, getattr(user, "username", ""), getattr(user, "first_name", ""))
+    referrals = sum(1 for row in DATA.setdefault("referrals", {}).values() if isinstance(row, dict) and int(row.get("referrer", 0) or 0) == uid)
+    points = int(DATA.setdefault("points", {}).get(str(uid), 0) or 0)
+    bot.send_message(message.chat.id,
+        "👤 <b>پروفایل شما</b>\n━━━━━━━━━━━━━━\n"
+        f"نام: {esc(getattr(user, 'first_name', '') or 'کاربر')}\n"
+        f"شناسه: <code>{uid}</code>\n"
+        f"⭐ امتیاز بازی: <b>{points}</b>\n"
+        f"👥 دعوت‌های ثبت‌شده: <b>{referrals}</b>\n"
+        f"💳 موجودی کیف پول: <b>{wallet(uid):,} تومان</b>\n"
+        f"📅 عضویت در ربات: {esc(profile.get('joined', 'ثبت نشده'))}")
+
+@bot.message_handler(commands=["top", "leaderboard"])
+def leaderboard_command(message):
+    points = DATA.setdefault("points", {})
+    rows = sorted(((int(uid), int(score or 0)) for uid, score in points.items()), key=lambda row: row[1], reverse=True)[:10]
+    if not rows or not any(score for _, score in rows):
+        bot.send_message(message.chat.id, "🏆 هنوز امتیازی ثبت نشده؛ با نوشتن «بازی» یا /game شروع کن.")
+        return
+    lines = []
+    medals = ["🥇", "🥈", "🥉"]
+    for index, (uid, score) in enumerate(rows, 1):
+        user = DATA.setdefault("users", {}).get(str(uid), {})
+        name = (user.get("first_name") or user.get("username") or f"کاربر {uid}") if isinstance(user, dict) else f"کاربر {uid}"
+        icon = medals[index-1] if index <= 3 else f"{index}."
+        lines.append(f"{icon} {esc(name)} — <b>{score}</b> امتیاز")
+    bot.send_message(message.chat.id, "🏆 <b>جدول امتیازهای MASIH GUARD</b>\n━━━━━━━━━━━━━━\n" + "\n".join(lines))
+
+@bot.message_handler(commands=["panel"])
+def panel_command(message):
+    uid = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+    chat_type = getattr(getattr(message, "chat", None), "type", "private")
+    if chat_type in ("group", "supergroup"):
+        if not is_group_admin(message.chat.id, uid):
+            bot.reply_to(message, "⛔ پنل تنظیمات فقط برای مدیران همین گروه و مالک ربات مجاز است.")
+            return
+        send_group_panel(message.chat.id)
+        return
+    if not is_owner(uid):
+        bot.send_message(uid, "⛔ پنل مدیریت مالک فقط برای مالک اصلی ربات در دسترس است.")
+        return
+    send_panel(uid, user_id=uid)
+
+@bot.message_handler(commands=["stats"])
+def stats_command(message):
+    if getattr(message.chat, "type", "private") in ("group", "supergroup"):
+        gs = DATA.setdefault("group_stats", {}).get(str(message.chat.id), {})
+        active = len(DATA.setdefault("active_members", {}).get(str(message.chat.id), {}))
+        bot.reply_to(message, f"📊 <b>آمار گروه</b>\nپیام‌ها: {int(gs.get('messages', 0))}\nپیام‌های مسدودشده: {int(gs.get('blocked', 0))}\nورودها: {int(gs.get('joins', 0))}\nخروج‌ها: {int(gs.get('leaves', 0))}\nکاربران دیده‌شده: {active}")
+    else:
+        bot.send_message(message.chat.id, stats_text())
+
+@bot.message_handler(commands=["cancel"])
+def cancel_command(message):
+    uid = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+    pending = WAITING.pop(uid, None)
+    GAMES.pop(uid, None)
+    if pending:
+        bot.reply_to(message, "✅ عملیات در انتظار لغو شد.")
+    else:
+        bot.reply_to(message, "ℹ️ عملیات فعالی برای لغو وجود نداشت.")
+
+@bot.message_handler(commands=["game", "games"])
+def game_command(message):
+    game_url = os.getenv("WEB_GAME_URL", "").strip()
+    if not game_url:
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+        if base_url.startswith("https://"):
+            game_url = base_url + "/game"
+    if game_url.startswith("https://"):
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🎮 باز کردن فهرست ۵۰ بازی", url=game_url))
+        bot.reply_to(message, "🎮 <b>MASIH GUARD ARCADE</b>\nفهرست بازی‌ها و کارت‌های تصویری در مرورگر باز می‌شود.\nبرای بازی متنی داخل تلگرام، کلمهٔ «بازی» را بدون اسلش بفرست.", reply_markup=kb)
+    else:
+        bot.reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز تنظیم نشده است. در هاست، WEB_GAME_URL را روی آدرس HTTPS سرویس وب ربات به‌همراه /game قرار بده؛ نمونه: https://your-service.onrender.com/game")
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
+        if data.startswith("captcha:"):
+            if not call.message or call.message.chat.type not in ("group", "supergroup"):
+                bot.answer_callback_query(call.id, "این تأیید فقط داخل گروه انجام می‌شود.", show_alert=True); return
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                bot.answer_callback_query(call.id, "درخواست کپچا نامعتبر است.", show_alert=True); return
+            try: target_uid, chosen = int(parts[1]), int(parts[2])
+            except ValueError:
+                bot.answer_callback_query(call.id, "درخواست کپچا نامعتبر است.", show_alert=True); return
+            if int(call.from_user.id) != target_uid:
+                bot.answer_callback_query(call.id, "این دکمه برای عضو دیگری است.", show_alert=True); return
+            captcha_key = f"{call.message.chat.id}:{target_uid}"
+            record = DATA.setdefault("captchas", {}).get(captcha_key)
+            if not record:
+                bot.answer_callback_query(call.id, "کپچای فعالی برای این عضو ثبت نشده است؛ از مدیر بخواه وضعیت ورودت را بررسی کند.", show_alert=True); return
+            if float(record.get("expires", 0)) < time.time():
+                a, b = random.randint(2, 9), random.randint(1, 9)
+                answer = a + b
+                options = list({answer, answer + random.choice([1, 2]), max(0, answer - random.choice([1, 2]))})
+                while len(options) < 3: options.append(answer + len(options) + 2)
+                random.shuffle(options)
+                DATA.setdefault("captchas", {})[captcha_key] = {"answer": answer, "expires": time.time() + 300, "created": now_text()}
+                save_data()
+                kb = types.InlineKeyboardMarkup(row_width=3)
+                kb.row(*[types.InlineKeyboardButton(str(value), callback_data=f"captcha:{target_uid}:{value}") for value in options])
+                bot.answer_callback_query(call.id, "زمان قبلی تمام شد؛ سؤال جدید آماده شد.", show_alert=True)
+                try: bot.edit_message_text(f"🔐 <b>تأیید ورود</b>\nبرای ادامه، جواب را انتخاب کن: <b>{a} + {b} = ؟</b>\n⏳ اعتبار: ۵ دقیقه", call.message.chat.id, call.message.message_id, reply_markup=kb)
+                except Exception: pass
+                return
+            if chosen != int(record.get("answer", -999)):
+                bot.answer_callback_query(call.id, "جواب درست نیست؛ دوباره تلاش کن.", show_alert=True); return
+            try:
+                chat = bot.get_chat(call.message.chat.id)
+                defaults = getattr(chat, "permissions", None)
+                fields = ("can_send_messages", "can_send_audios", "can_send_documents", "can_send_photos", "can_send_videos", "can_send_video_notes", "can_send_voice_notes", "can_send_polls", "can_send_other_messages", "can_add_web_page_previews")
+                permissions = {field: (getattr(defaults, field, None) is not False) for field in fields}
+                bot.restrict_chat_member(call.message.chat.id, target_uid, permissions=types.ChatPermissions(**permissions))
+                DATA.setdefault("captchas", {}).pop(captcha_key, None); save_data()
+                bot.answer_callback_query(call.id, "تأیید شد؛ خوش آمدی!")
+                try: bot.edit_message_text("✅ <b>تأیید انجام شد</b> — عضو می‌تواند طبق مجوزهای پیش‌فرض گروه پیام بدهد.", call.message.chat.id, call.message.message_id, reply_markup=None)
+                except Exception: pass
+            except Exception as captcha_error:
+                print("Captcha unrestrict error:", repr(captcha_error))
+                bot.answer_callback_query(call.id, "تأیید انجام شد اما رفع محدودیت ناموفق بود؛ مدیر باید مجوز ربات را بررسی کند.", show_alert=True)
+            return
         if data.startswith("gpanel:"):
             if not call.message or call.message.chat.type not in ("group", "supergroup") or not is_group_admin(chat_id, uid):
                 bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه یا مالک اجازه تغییر دارد.", show_alert=True)
                 return
             if data.startswith("gpanel:toggle:"):
                 key = data.split(":", 2)[2]
-                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "welcome_on", "farewell_on", "media_lock", "phone_filter"}
+                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "welcome_on", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on"}
                 if key not in allowed:
                     bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
                     return
                 settings = get_group_settings(chat_id)
+                if key in {"captcha_on", "anti_raid_on"}:
+                    try:
+                        me = bot.get_me(); member = bot.get_chat_member(chat_id, me.id)
+                        if getattr(member, "status", "") != "creator" and not bool(getattr(member, "can_restrict_members", False)):
+                            bot.answer_callback_query(call.id, "برای کپچا و ضد یورش، ربات باید مجوز محدودکردن اعضا داشته باشد.", show_alert=True); return
+                    except Exception:
+                        bot.answer_callback_query(call.id, "نتونستم مجوز محدودکردن اعضا را بررسی کنم.", show_alert=True); return
                 protective = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "media_lock", "phone_filter"}
                 if key in protective:
                     try:
@@ -2174,12 +2350,12 @@ def callback_handler(call):
                     "remove_bot_admin":"نام کاربری ادمینی را که می‌خواهی دسترسی‌اش حذف شود با @ بفرست؛ نمونه: @username"
                 }
                 bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
-            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","quiet_hours","welcome_image","welcome_delete_seconds"}
+            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds"}
             if action in group_actions:
                 WAITING[uid]={"action":"select_group_for_action","next_action":action}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
             WAITING[uid]={"action":action,"chat_id":chat_id}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","add_note":"قالب یادداشت: نام کوتاه | متن یادداشت. در گروه با #نام یادداشت نمایش داده می‌شود.","delete_note":"نام یادداشتی را که می‌خواهی حذف شود بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
             bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
         if data.startswith("show:"):
             if not is_owner(uid):
@@ -2192,6 +2368,10 @@ def callback_handler(call):
             if action == "rules":
                 WAITING[uid]={"action":"show_rules_group"}
                 bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا قوانین همان گروه نمایش داده شود.")
+                return
+            if action == "notes":
+                WAITING[uid]={"action":"show_notes_group"}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا یادداشت‌های همان گروه نمایش داده شوند.")
                 return
             if action == "bot_admins":
                 admins = DATA.setdefault("bot_admins", {})
@@ -2270,9 +2450,26 @@ def private_text_handler(message):
         WAITING[uid] = {"action":"public_font_text"}
         bot.send_message(uid, "🔤 متن یا اسم دلخواهت رو بفرست تا ۲۰۰ مدل فونت فانتزی و جیگول میگول بسازم.")
         return
-    if compact in {"بازی", "یهبازی", "بازیها", "game", "play"}:
-        send_game_link(message)
-        return
+    if compact in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
+        key=f"private:{uid}"; idx=GAME_CYCLES.get(key,0)%10
+        prompts=[
+            ("🏀 بازی ۱/۱۰ — بسکتبال", "برای پرتاب توپ، عددی از ۱ تا ۵ حدس بزن.", "number", 5),
+            ("⚽ بازی ۲/۱۰ — پنالتی فوتبال", "جهت دروازه‌بان را حدس بزن: ۱، ۲ یا ۳.", "number", 3),
+            ("🧩 بازی ۳/۱۰ — معما", "چی همیشه دنبالت می‌آید ولی در تاریکی ناپدید می‌شود؟ جواب را بنویس.", "riddle", "سایه"),
+            ("🎯 بازی ۴/۱۰ — هدف‌گیری", "عدد هدف از ۱ تا ۵ را حدس بزن.", "number", 5),
+            ("✊ بازی ۵/۱۰ — سنگ‌کاغذ‌قیچی", "یکی را بنویس: سنگ، کاغذ یا قیچی.", "rps", None),
+            ("🧠 بازی ۶/۱۰ — حدس عدد", "عدد مخفی بین ۱ تا ۱۰ را حدس بزن.", "number", 10),
+            ("🎲 بازی ۷/۱۰ — تاس", "حدس بزن تاس چه عددی می‌آورد (۱ تا ۶).", "number", 6),
+            ("🧮 بازی ۸/۱۰ — حساب سریع", "حاصل ۷ + ۸ چند می‌شود؟", "math", 15),
+            ("🔤 بازی ۹/۱۰ — کلمه‌سازی", "یک کلمهٔ فارسی که با «م» شروع می‌شود بفرست.", "word", "م"),
+            ("🏁 بازی ۱۰/۱۰ — چالش عددی", "یک عدد از ۱ تا ۱۰ حدس بزن.", "number", 10),
+        ]
+        title,prompt,kind,arg=prompts[idx]
+        answer = random.randint(1,arg) if kind=="number" else (random.choice(["سنگ","کاغذ","قیچی"]) if kind=="rps" else arg)
+        GAMES[uid]={"kind":kind,"answer":answer,"title":title}
+        WAITING[uid]={"action":"game:round","chat_id":uid}
+        GAME_CYCLES[key]=idx+1
+        bot.send_message(uid, f"{title}\n{prompt}\n\nپاسخت را بفرست."); return
     if normalized_private in {"هوش", "هوش مصنوعی", "دستیار", "دستیار هوشمند"}:
         bot.send_message(uid, "🧠 دستیار آماده است. درخواستت رو بعد از «هوش» بنویس؛ مثلاً «هوش این متن رو خلاصه کن» یا «هوش راهنمای قفل لینک رو بگو».")
         return
@@ -2320,7 +2517,7 @@ def private_text_handler(message):
     action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
     owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
                 "public_features","channel_url","website_url","referral_reward_toman","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
-                "welcome_text","farewell_text","rules","auto_reply","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","register_bot_admin","remove_bot_admin"}
+                "welcome_text","farewell_text","rules","auto_reply","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","show_notes_group","register_bot_admin","remove_bot_admin"}
     if action in owner_only and not is_owner(uid):
         WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک است."); return
     try:
@@ -2401,6 +2598,13 @@ def private_text_handler(message):
             if not is_group_licensed(target): raise PermissionError("این گروه مجوز فعال ندارد.")
             bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
             WAITING.pop(uid,None); return
+        if action=="show_notes_group":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            notes=get_group_settings(target).get("notes", {})
+            body="\n\n".join(f"<b>#{esc(k)}</b>\n{esc(v)}" for k,v in notes.items())
+            bot.send_message(uid,"📝 <b>یادداشت‌های گروه</b>\n"+(body or "یادداشتی ثبت نشده است."))
+            WAITING.pop(uid,None); return
         if action == "payout_amount":
             amount = int(text)
             result = request_payout(uid, amount)
@@ -2438,7 +2642,7 @@ def private_text_handler(message):
             if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
             next_action=pending.get("next_action","")
             WAITING[uid]={"action":next_action,"chat_id":target}
-            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.","add_note":"قالب: نام کوتاه | متن یادداشت","delete_note":"نام یادداشت را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰)."}
             bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
         if action=="whitelist":
             target=int(text)
@@ -2451,7 +2655,7 @@ def private_text_handler(message):
             if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
             cfg=get_group_settings(target)
             lines=[f"🆔 شناسه گروه: <code>{target}</code>",f"🛡 مجوز نصب: {'فعال' if is_group_licensed(target) else 'غیرفعال'}"]
-            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
+            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_raid_on":"ضد یورش ورود","captcha_on":"کپچا","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
             for key,label in labels.items(): lines.append(f"{label}: {'روشن' if cfg.get(key,False) else 'خاموش'}")
             lines.append(f"قوانین: {esc(cfg.get('rules',''))[:500]}")
             bot.send_message(uid,"⚙️ <b>شناسه و تنظیمات گروه</b>\n"+"\n".join(lines))
@@ -2619,6 +2823,18 @@ def private_text_handler(message):
                 bot.send_message(uid, ("🔤 <b>۲۰۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,200)})</b>\n━━━━━━━━━━━━━━\n")+"\n\n".join(lines))
         elif action in ("welcome_text","farewell_text","rules"):
             s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
+        elif action=="add_note":
+            if "|" not in text: raise ValueError("قالب: نام کوتاه | متن یادداشت")
+            name, body = [part.strip() for part in text.split("|", 1)]
+            name = re.sub(r"[^\w\u0600-\u06ff-]", "", name.replace("#", "")).strip().lower()[:40]
+            if not name or not body: raise ValueError("نام و متن یادداشت نباید خالی باشد.")
+            notes = get_group_settings(chat_id).setdefault("notes", {})
+            notes[name] = body[:3000]; save_data(); bot.send_message(uid, f"✅ یادداشت #{esc(name)} ذخیره شد. در گروه با #{esc(name)} فراخوانی می‌شود.")
+        elif action=="delete_note":
+            name = re.sub(r"[^\w\u0600-\u06ff-]", "", text.replace("#", "")).strip().lower()[:40]
+            notes = get_group_settings(chat_id).setdefault("notes", {})
+            removed = notes.pop(name, None); save_data()
+            bot.send_message(uid, "🗑 یادداشت حذف شد." if removed is not None else "این یادداشت پیدا نشد.")
         elif action=="auto_reply":
             if "|" not in text: bot.send_message(uid,"قالب: کلمه کلیدی | متن پاسخ"); return
             keyword,reply=[p.strip() for p in text.split("|",1)]
@@ -2721,10 +2937,11 @@ bot.message_handler(content_types=["text"], func=lambda m: getattr(getattr(m, "c
 GAME_HTML = r"""<!doctype html>
 <html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#07101f"><title>MASIH GUARD • Arcade</title>
 <style>
-:root{color-scheme:dark;--a:#57e2d0;--b:#ffbc68;--panel:#101d2bea;--line:#294657}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:14px;background:radial-gradient(ellipse at top,#193d52,#08111f 55%,#050912);color:#f4f8ff;font:16px Tahoma,Arial,sans-serif}.wrap{max-width:760px;margin:auto}.brand{color:var(--a);font-weight:bold;margin:8px 2px 14px;letter-spacing:.4px}.hero,.panel{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:16px;box-shadow:0 14px 38px #0006}.topline{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.tag,.stat{background:#203748;border:1px solid #36596b;padding:8px 11px;border-radius:12px;font-size:13px}.hero h1{font-size:25px;margin:12px 0 7px}.muted{color:#a8bdcc;font-size:13px;line-height:1.8}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.panel{margin-top:13px}.stage{min-height:300px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:13px;text-align:center}.stageTitle{font-size:21px;font-weight:bold;color:var(--b)}.field{width:100%;max-width:320px;padding:13px;border-radius:12px;background:#07121f;color:white;border:1px solid #3a6579;font:inherit;text-align:center}.btn{border:1px solid #3a6579;background:linear-gradient(135deg,#24475c,#172d41);color:white;padding:12px 15px;border-radius:13px;font:inherit;cursor:pointer;touch-action:manipulation;min-height:44px}.btn:active{transform:scale(.98)}.primary{background:linear-gradient(135deg,#12a99a,#176a87);font-weight:bold}.buttons{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;width:100%}.result{min-height:26px;color:#7ff0ce;font-weight:bold;line-height:1.8}.board{display:grid;grid-template-columns:repeat(3,minmax(65px,95px));gap:7px}.cell{height:72px;font-size:26px;padding:4px}.big{font-size:46px}.bar{width:min(100%,340px);height:12px;border-radius:20px;background:#07121f;overflow:hidden;border:1px solid #36596b}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,#12a99a,#ffbc68)}.footer{margin:14px;text-align:center;color:#7f97aa;font-size:12px}@media(max-width:430px){body{padding:9px}.hero,.panel{padding:12px}.hero h1{font-size:22px}.stage{min-height:270px}.cell{height:65px}}
+:root{color-scheme:dark;--a:#57e2d0;--b:#ffbc68;--panel:#101d2bea;--line:#294657}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:14px;background:radial-gradient(ellipse at top,#193d52,#08111f 55%,#050912);color:#f4f8ff;font:16px Tahoma,Arial,sans-serif}.wrap{max-width:760px;margin:auto}.brand{color:var(--a);font-weight:bold;margin:8px 2px 14px;letter-spacing:.4px}.hero,.panel{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:16px;box-shadow:0 14px 38px #0006}.topline{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.tag,.stat{background:#203748;border:1px solid #36596b;padding:8px 11px;border-radius:12px;font-size:13px}.hero h1{font-size:25px;margin:12px 0 7px}.muted{color:#a8bdcc;font-size:13px;line-height:1.8}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.panel{margin-top:13px}.stage{min-height:300px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:13px;text-align:center}.stageTitle{font-size:21px;font-weight:bold;color:var(--b)}.field{width:100%;max-width:320px;padding:13px;border-radius:12px;background:#07121f;color:white;border:1px solid #3a6579;font:inherit;text-align:center}.btn{border:1px solid #3a6579;background:linear-gradient(135deg,#24475c,#172d41);color:white;padding:12px 15px;border-radius:13px;font:inherit;cursor:pointer;touch-action:manipulation;min-height:44px}.btn:active{transform:scale(.98)}.primary{background:linear-gradient(135deg,#12a99a,#176a87);font-weight:bold}.buttons{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;width:100%}.result{min-height:26px;color:#7ff0ce;font-weight:bold;line-height:1.8}.board{display:grid;grid-template-columns:repeat(3,minmax(65px,95px));gap:7px}.cell{height:72px;font-size:26px;padding:4px}.big{font-size:46px}.bar{width:min(100%,340px);height:12px;border-radius:20px;background:#07121f;overflow:hidden;border:1px solid #36596b}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,#12a99a,#ffbc68)}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px}.game-card{display:flex;flex-direction:column;align-items:center;gap:7px;min-height:128px;padding:13px 9px;border-radius:17px;border:1px solid #315365;background:linear-gradient(145deg,#17364a,#101c2c);color:#f4f8ff;font:inherit;cursor:pointer;text-align:center;touch-action:manipulation}.game-card:hover,.game-card:focus-visible{border-color:var(--a);outline:2px solid #57e2d055;transform:translateY(-1px)}.game-art{width:58px;height:58px;display:grid;place-items:center;border-radius:16px;font-size:31px;background:radial-gradient(circle at 30% 25%,#32647b,#102335 72%);border:1px solid #3b6479;box-shadow:inset 0 0 18px #57e2d022}.game-card strong{font-size:13px;line-height:1.5}.game-card small{font-size:11px;color:#a8bdcc;line-height:1.5}.gallery-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.gallery-head h2{font-size:18px;margin:0 0 12px}.footer{margin:14px;text-align:center;color:#7f97aa;font-size:12px}@media(max-width:430px){body{padding:9px}.hero,.panel{padding:12px}.hero h1{font-size:22px}.stage{min-height:270px}.cell{height:65px}}
 </style></head><body><div class="wrap"><div class="brand">Masih Hackring <span class="muted">| MASIH GUARD ARCADE</span></div>
 <section class="hero"><div class="topline"><span class="tag">🎮 بازی تصادفی</span><span class="tag" id="gameNum">بازی ۱ از ۵۰</span></div><h1 id="title">در حال آماده‌سازی…</h1><div class="muted" id="desc">یک بازی کوتاه و سرگرم‌کننده؛ آماده‌ای؟</div><div class="stats"><span class="stat">⭐ امتیاز این دور: <b id="score">0</b></span><span class="stat">🏆 بهترین دور: <b id="best">0</b></span></div></section>
 <section class="panel"><div class="stage" id="stage"></div><div class="result" id="result" aria-live="polite"></div><div class="buttons"><button class="btn primary" id="again">🔄 بازی تصادفی دیگر</button><button class="btn" id="reset">↻ شروع دوباره همین بازی</button></div></section>
+<section class="panel"><div class="gallery-head"><h2>🕹️ فهرست ۵۰ بازی</h2><span class="muted">برای شروع، روی کارت بازی بزن</span></div><div id="gallery" class="gallery"></div></section>
 <div class="footer">MASIH GUARD • بازی‌های مرورگری سازگار با موبایل • امتیازها محلی هستند</div></div>
 <script>
 const $=id=>document.getElementById(id),stage=$("stage");
@@ -2741,14 +2958,17 @@ const catalog=[
 ["🧯 نجات شعله","قطره آب را انتخاب کن",water],["🧱 دیوارشکن","آجر هدف را بزن",brick],["🪙 شکار سکه","سکه‌ها را جمع کن",coins],["🧠 درست یا غلط","درستی جمله را مشخص کن",truefalse],["🏁 مسابقه سرعت","در زمان کوتاه امتیاز بگیر",speed]
 ];
 let current=-1,score=0,best=0,timers=[],state={};
-function say(s){$("result").textContent=s}function add(n=1){score+=n;$("score").textContent=score;if(score>best){best=score;$("best").textContent=best}}
+try{best=Number(localStorage.getItem("masih_guard_arcade_best")||0)||0}catch(e){}
+$("best").textContent=best;
+function say(s){$("result").textContent=s}function add(n=1){score+=n;$("score").textContent=score;if(score>best){best=score;$("best").textContent=best;try{localStorage.setItem("masih_guard_arcade_best",String(best))}catch(e){}}}
 function txt(s,cls=""){let e=document.createElement("div");e.textContent=s;if(cls)e.className=cls;stage.appendChild(e);return e}
 function btn(s,fn,cls="btn"){let b=document.createElement("button");b.className=cls;b.textContent=s;b.onclick=fn;stage.appendChild(b);return b}
 function inp(ph="پاسخ را وارد کن"){let e=document.createElement("input");e.className="field";e.placeholder=ph;e.autocomplete="off";stage.appendChild(e);return e}
 function opts(arr,fn){let d=document.createElement("div");d.className="buttons";stage.appendChild(d);arr.forEach((s,i)=>{let b=document.createElement("button");b.className="btn";b.textContent=s;b.onclick=()=>fn(i,s);d.appendChild(b)})}
 function later(fn,ms){let t=setTimeout(fn,ms);timers.push(t)}
+function renderGallery(){const gallery=$("gallery");if(!gallery)return;catalog.forEach((item,index)=>{const card=document.createElement("button");card.type="button";card.className="game-card";card.setAttribute("aria-label","شروع بازی "+item[0]);const art=document.createElement("span");art.className="game-art";art.textContent=(item[0].match(/^\S+/)||["🎮"])[0];const title=document.createElement("strong");title.textContent=item[0].replace(/^\S+\s*/,"");const desc=document.createElement("small");desc.textContent=item[1];card.append(art,title,desc);card.addEventListener("click",()=>{start(index,true);window.scrollTo({top:0,behavior:"smooth"})});gallery.appendChild(card)})}
 function clean(){timers.forEach(clearTimeout);timers=[];stage.innerHTML="";say("");score=0;$("score").textContent="0";state={}}
-function start(exclude=current){clean();let n;do{n=Math.floor(Math.random()*catalog.length)}while(catalog.length>1&&n===exclude);current=n;$("title").textContent=catalog[n][0];$("desc").textContent=catalog[n][1];$("gameNum").textContent="بازی "+(n+1)+" از "+catalog.length;try{catalog[n][2]()}catch(e){stage.innerHTML="";txt("مشکلی در این دور پیش آمد.");btn("شروع دوباره",()=>start(current));say("یک دور تازه امتحان کن.")}}
+function start(exclude=current,exact=false){clean();let n;if(exact&&Number.isInteger(exclude)&&exclude>=0&&exclude<catalog.length){n=exclude}else{do{n=Math.floor(Math.random()*catalog.length)}while(catalog.length>1&&n===exclude)}current=n;$("title").textContent=catalog[n][0];$("desc").textContent=catalog[n][1];$("gameNum").textContent="بازی "+(n+1)+" از "+catalog.length;try{catalog[n][2]()}catch(e){stage.innerHTML="";txt("مشکلی در این دور پیش آمد.");btn("شروع دوباره",()=>start(current,true));say("یک دور تازه امتحان کن.")}}
 function basket(){txt("🏀","big");btn("پرتاب توپ",()=>{if(Math.random()>.42){add(10);say("گل شد! +۱۰ امتیاز")}else say("این بار گل نشد؛ دوباره تلاش کن")},"btn primary")}
 function penalty(){txt("🥅 دروازه","big");opts(["چپ","وسط","راست"],i=>{if(Math.random()>.38){add(5);say("گل! +۵ امتیاز")}else say("دروازه‌بان توپ را گرفت!")})}
 function guess(){let a=1+Math.floor(Math.random()*20);txt("یک عدد بین ۱ تا ۲۰");let i=inp("عدد");btn("بررسی",()=>{let v=+i.value;if(!Number.isInteger(v)||v<1||v>20)return say("عدد بین ۱ تا ۲۰ وارد کن");if(v===a){add(5);say("درست حدس زدی! +۵")}else say(v<a?"بالاتر برو ⬆️":"پایین‌تر برو ⬇️")})}
@@ -2800,13 +3020,13 @@ function brick(){simple("آجر هدف را بزن",["🧱","🧱","🧱","🧱"
 function coins(){let n=0;btn("🪙 جمع کن",()=>{n++;add(1);say("سکه‌ها: "+n+" • +۱")})}
 function truefalse(){let q=[["خورشید یک ستاره است",true],["عدد ۲ از ۵ بزرگ‌تر است",false],["آب در دمای معمولی مایع است",true]][Math.floor(Math.random()*3)];txt(q[0]);opts(["درست ✅","غلط ❌"],i=>i===(q[1]?0:1)?(add(2),say("جواب درست! +۲")):say("این بار اشتباه بود"))}
 function speed(){let n=0,b=btn("شروع کن و سریع بزن",()=>{n++;b.textContent="امتیاز "+n});later(()=>{b.disabled=true;add(n);say("نتیجه: "+n+" • امتیاز +"+n)},4000)}
-$("again").onclick=()=>start(current);$("reset").onclick=()=>{let n=current;clean();current=n;$("title").textContent=catalog[n][0];$("desc").textContent=catalog[n][1];catalog[n][2]()};start(-1);
+$("again").onclick=()=>start(current,false);$("reset").onclick=()=>start(current,true);renderGallery();start(-1,false);
 </script></body></html>"""
 class _GameRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path in ("/", "/healthz", "/health"):
-            body = b"MASIH GUARD is running"
+        if path in ("/", "/healthz", "/health", "/ready"):
+            body = b"MASIH GUARD S1000+ is running"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -2843,6 +3063,7 @@ def start_game_web_server():
 
 if __name__ == "__main__":
     print(f"{BRAND} {VERSION}: starting web server and polling")
+    print("Configuration: BOT_TOKEN=set; AI=" + ("enabled" if AI_API_KEY else "not configured") + "; web game uses WEB_GAME_URL or RENDER_EXTERNAL_URL")
     try:
         start_game_web_server()
     except Exception as web_error:
