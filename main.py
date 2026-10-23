@@ -253,6 +253,29 @@ def configured_url(key, fallback):
     value = str(bot_settings().get(key, "") or fallback).strip()
     return value if value.startswith(("https://", "http://")) else fallback
 
+def get_public_game_url():
+    """Resolve the externally reachable HTTPS URL for the embedded browser game."""
+    direct = (os.getenv("WEB_GAME_URL") or "").strip()
+    if direct.startswith("https://"):
+        return direct.rstrip("/")
+    for name in ("FADEHOST_PUBLIC_URL", "PUBLIC_URL", "APP_URL", "SERVICE_URL", "RENDER_EXTERNAL_URL", "HOST_URL"):
+        base = (os.getenv(name) or "").strip().rstrip("/")
+        if base.startswith("https://"):
+            return base if base.endswith("/game") else base + "/game"
+    return ""
+
+
+def send_game_link(message):
+    """Send the browser-game button in either a group or private chat."""
+    game_url = get_public_game_url()
+    if game_url:
+        game_kb = types.InlineKeyboardMarkup()
+        game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
+        bot.reply_to(message, "🎮 <b>بازی MASIH GUARD • ۵۰ بازی</b>\nبرای ورود به صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
+    else:
+        bot.reply_to(message, "⚠️ صفحهٔ بازی داخل ربات آماده است، اما آدرس عمومی هاست تنظیم نشده. در Environment هاست، متغیر <code>WEB_GAME_URL</code> را با آدرس عمومی سایت به‌همراه <code>/game</code> تنظیم کن.")
+
+
 def is_group_admin(chat_id, user_id):
     if is_owner(user_id): return True
     try: return bot.get_chat_member(chat_id, user_id).status in ("administrator", "creator")
@@ -1440,18 +1463,8 @@ def group_message_handler(message):
         if compact_public in {"آمار", "آمارگروه", "stats"}:
             bot.reply_to(message, f"📊 <b>آمار گروه</b>\n💬 پیام‌ها: {DATA['stats'].get('messages', 0)}\n🚫 موارد مسدودشده: {DATA['stats'].get('blocked', 0)}\n⚠️ اخطارها: {DATA['stats'].get('warns', 0)}")
             return
-        if compact_public in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
-            game_url = os.getenv("WEB_GAME_URL", "").strip()
-            if not game_url:
-                base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
-                if base_url.startswith("https://"):
-                    game_url = base_url + "/game"
-            if game_url.startswith("https://"):
-                game_kb = types.InlineKeyboardMarkup()
-                game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
-                bot.reply_to(message, "🎮 <b>بازی MASIH GUARD</b>\nبرای باز کردن صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
-            else:
-                bot.reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز از طرف هاست مشخص نشده است. متغیر RENDER_EXTERNAL_URL یا WEB_GAME_URL باید تنظیم باشد.")
+        if compact_public in {"بازی", "یهبازی", "بازیها", "game", "play"}:
+            send_game_link(message)
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -2257,26 +2270,9 @@ def private_text_handler(message):
         WAITING[uid] = {"action":"public_font_text"}
         bot.send_message(uid, "🔤 متن یا اسم دلخواهت رو بفرست تا ۲۰۰ مدل فونت فانتزی و جیگول میگول بسازم.")
         return
-    if compact in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
-        key=f"private:{uid}"; idx=GAME_CYCLES.get(key,0)%10
-        prompts=[
-            ("🏀 بازی ۱/۱۰ — بسکتبال", "برای پرتاب توپ، عددی از ۱ تا ۵ حدس بزن.", "number", 5),
-            ("⚽ بازی ۲/۱۰ — پنالتی فوتبال", "جهت دروازه‌بان را حدس بزن: ۱، ۲ یا ۳.", "number", 3),
-            ("🧩 بازی ۳/۱۰ — معما", "چی همیشه دنبالت می‌آید ولی در تاریکی ناپدید می‌شود؟ جواب را بنویس.", "riddle", "سایه"),
-            ("🎯 بازی ۴/۱۰ — هدف‌گیری", "عدد هدف از ۱ تا ۵ را حدس بزن.", "number", 5),
-            ("✊ بازی ۵/۱۰ — سنگ‌کاغذ‌قیچی", "یکی را بنویس: سنگ، کاغذ یا قیچی.", "rps", None),
-            ("🧠 بازی ۶/۱۰ — حدس عدد", "عدد مخفی بین ۱ تا ۱۰ را حدس بزن.", "number", 10),
-            ("🎲 بازی ۷/۱۰ — تاس", "حدس بزن تاس چه عددی می‌آورد (۱ تا ۶).", "number", 6),
-            ("🧮 بازی ۸/۱۰ — حساب سریع", "حاصل ۷ + ۸ چند می‌شود؟", "math", 15),
-            ("🔤 بازی ۹/۱۰ — کلمه‌سازی", "یک کلمهٔ فارسی که با «م» شروع می‌شود بفرست.", "word", "م"),
-            ("🏁 بازی ۱۰/۱۰ — چالش عددی", "یک عدد از ۱ تا ۱۰ حدس بزن.", "number", 10),
-        ]
-        title,prompt,kind,arg=prompts[idx]
-        answer = random.randint(1,arg) if kind=="number" else (random.choice(["سنگ","کاغذ","قیچی"]) if kind=="rps" else arg)
-        GAMES[uid]={"kind":kind,"answer":answer,"title":title}
-        WAITING[uid]={"action":"game:round","chat_id":uid}
-        GAME_CYCLES[key]=idx+1
-        bot.send_message(uid, f"{title}\n{prompt}\n\nپاسخت را بفرست."); return
+    if compact in {"بازی", "یهبازی", "بازیها", "game", "play"}:
+        send_game_link(message)
+        return
     if normalized_private in {"هوش", "هوش مصنوعی", "دستیار", "دستیار هوشمند"}:
         bot.send_message(uid, "🧠 دستیار آماده است. درخواستت رو بعد از «هوش» بنویس؛ مثلاً «هوش این متن رو خلاصه کن» یا «هوش راهنمای قفل لینک رو بگو».")
         return
