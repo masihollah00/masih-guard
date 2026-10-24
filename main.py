@@ -87,7 +87,7 @@ DEFAULT_DATA = {
         "referral_reward_toman": 5000,
         "subscription_packages": [[30, 40000], [60, 80000], [90, 120000]]
     },
-    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {}, "force_add_credits": {}, "force_invite_links": {},
+    "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {}, "force_add_credits": {}, "force_invite_links": {}, "tapchi_violations": {},
     "subscription_requests": {}, "payout_requests": {},
     "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
     "group_stats": {}, "active_members": {}, "manager_roles": {}, "bot_admins": {}
@@ -368,16 +368,27 @@ def configured_url(key, fallback):
 
 
 def get_game_url():
-    """Resolve the browser-game URL across common hosts; return empty unless HTTPS is configured."""
-    explicit = (os.getenv("WEB_GAME_URL") or "").strip().rstrip("/")
+    """Resolve the browser-game URL without accidentally creating /game/game."""
+    explicit = (os.getenv("WEB_GAME_URL") or "").strip()
     if explicit:
-        candidate = explicit if explicit.lower().endswith("/game") else explicit + "/game"
-        return candidate if candidate.startswith("https://") else ""
-    base = (os.getenv("PUBLIC_BASE_URL") or os.getenv("SERVICE_URL") or
-            os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+        # WEB_GAME_URL may be either the bot site's root or a direct game URL.
+        # Preserve a deliberate non-root path; only add /game to a root URL.
+        explicit = explicit.rstrip("/")
+        if not explicit.lower().startswith("https://"):
+            return ""
+        parsed = urlparse(explicit)
+        path = (parsed.path or "").rstrip("/")
+        if not path:
+            return explicit + "/game"
+        return explicit if path.lower().endswith("/game") else explicit
+
+    base = (os.getenv("PUBLIC_BASE_URL") or os.getenv("PUBLIC_URL") or
+            os.getenv("APP_URL") or os.getenv("FADEHOST_PUBLIC_URL") or
+            os.getenv("SERVICE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
     if not base:
         # Some hosts expose a bare public domain rather than a fully-qualified URL.
-        bare_domain = (os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("KOYEB_PUBLIC_DOMAIN") or "").strip().strip("/")
+        bare_domain = (os.getenv("RAILWAY_PUBLIC_DOMAIN") or
+                       os.getenv("KOYEB_PUBLIC_DOMAIN") or "").strip().strip("/")
         if bare_domain:
             base = bare_domain if "://" in bare_domain else "https://" + bare_domain
     if base.startswith("https://"):
@@ -1113,7 +1124,25 @@ def decide_payout_request(rid, paid, owner_uid):
 # ---------------- Security and moderation ----------------
 def get_text(message): return getattr(message, "text", None) or getattr(message, "caption", None) or ""
 def has_link(text): return bool(re.search(r"(https?://|www\.|t\.me/|telegram\.me/|@[A-Za-z0-9_]{5,})", text or "", re.I))
-def has_ad(text): return any(x in (text or "").casefold() for x in ["تبلیغ", "تبلیغات", "خرید ممبر", "فروش ممبر", "عضوگیری", "کسب درآمد تضمینی"])
+def has_ad(text):
+    """Conservative Persian/English ad detector; avoid treating every link as an ad."""
+    value = normalize_security_text(text or "")
+    phrases = (
+        "تبلیغ", "تبلیغات", "خرید ممبر", "فروش ممبر", "خریدعضو", "فروشعضو",
+        "عضوگیری", "کسب درآمد تضمینی", "درآمد تضمینی", "تبلیغ رایگان",
+        "افزایش ممبر", "افزایش فالوور", "فالوور رایگان", "بازدید رایگان",
+        "زیرمجموعه گیری", "زیرمجموعهگیری", "پنل فروش", "پنل ممبر",
+        "تبچی", "تبچیگری", "تبلیغچی", "تبلیغچیگری",
+        "buy members", "buy followers", "cheap followers", "earn money guaranteed",
+        "promotion service", "advertise here"
+    )
+    if any(normalize_security_text(phrase) in value for phrase in phrases):
+        return True
+    # Multiple links plus a sales/contact call-to-action is a strong ad signal.
+    raw = str(text or "").casefold()
+    link_count = len(re.findall(r"(?:https?://|www\\.|t\\.me/|telegram\\.me/|@[a-z0-9_]{5,})", raw))
+    sales_words = ("دایرکت", "پیام بده", "سفارش", "قیمت", "ثبت سفارش", "خرید", "فروش", "join now", "dm me", "order now")
+    return link_count >= 2 and any(word in raw for word in sales_words)
 def is_forwarded(m): return any(getattr(m, x, None) for x in ("forward_origin","forward_from","forward_from_chat","forward_date"))
 def has_media(m): return any(getattr(m,x,None) for x in ("photo","video","audio","voice","document","animation","sticker","video_note","contact","location"))
 def safe_delete(message):
@@ -1360,6 +1389,88 @@ def enforce_group_entry_gates(message):
     return False
 
 
+def handle_tapchi_violation(message, reason="تبلیغ یا تبچی"):
+    """Dedicated anti-tapchi escalation: warnings 1–4, one-hour mute at violation 5."""
+    chat = message.chat
+    user = message.from_user
+    if not user or getattr(chat, "type", "") not in ("group", "supergroup"):
+        return False
+    role = target_group_admin_status(chat.id, user.id)
+    # Never punish group admins/owner; if Telegram cannot verify the role, fail safe.
+    if role is not False:
+        return False
+
+    key = f"{chat.id}:{user.id}"
+    records = DATA.setdefault("tapchi_violations", {})
+    record = records.get(key, {})
+    now = time.time()
+    # Keep a rolling 30-day counter so old violations eventually expire.
+    if not isinstance(record, dict) or now - float(record.get("last_at", 0) or 0) > 30 * 86400:
+        record = {"count": 0, "last_at": 0}
+    count = int(record.get("count", 0)) + 1
+    record.update({"count": count, "last_at": now, "last_reason": str(reason)[:180]})
+    records[key] = record
+    DATA.setdefault("stats", {}).setdefault("warns", 0)
+    DATA["stats"]["warns"] = int(DATA["stats"]["warns"]) + 1
+    add_log("tapchi_violation", chat.id, user.id, f"{count}: {reason}")
+
+    if count < 5:
+        try:
+            bot.send_message(
+                chat.id,
+                f"🚫 <b>ضدتبچی فعال شد</b>\\n"
+                f"کاربر: <code>{user.id}</code>\\n"
+                f"دلیل: {esc(reason)}\\n"
+                f"اخطار تبلیغاتی: <b>{count}/5</b>\\n"
+                "تخلف پنجم باعث بی‌صدا شدن خودکار می‌شود."
+            )
+        except Exception as exc:
+            print("Tapchi warning notice error:", repr(exc))
+        save_data()
+        return True
+
+    # At the fifth ad violation, apply a temporary mute rather than a permanent ban.
+    try:
+        until = int(now + 3600)
+        bot.restrict_chat_member(
+            chat.id, user.id,
+            permissions=types.ChatPermissions(
+                can_send_messages=False, can_send_audios=False, can_send_documents=False,
+                can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+                can_send_voice_notes=False, can_send_polls=False,
+                can_send_other_messages=False, can_add_web_page_previews=False
+            ),
+            until_date=until
+        )
+        listing = DATA.setdefault("moderation_lists", {}).setdefault(
+            str(chat.id), {"banned": [], "muted": []}
+        )
+        if str(user.id) not in listing.setdefault("muted", []):
+            listing["muted"].append(str(user.id))
+        add_log("tapchi_auto_mute", chat.id, user.id, "پنجمین تخلف تبلیغاتی؛ سکوت یک‌ساعته")
+        try:
+            bot.send_message(
+                chat.id,
+                f"🔇 <b>ضدتبچی: محدودیت خودکار</b>\\n"
+                f"کاربر <code>{user.id}</code> به‌دلیل رسیدن به تخلف <b>{count}/5</b> "
+                "برای یک ساعت بی‌صدا شد."
+            )
+        except Exception as exc:
+            print("Tapchi mute notice error:", repr(exc))
+    except Exception as exc:
+        print("Tapchi auto-mute failed:", repr(exc))
+        try:
+            bot.send_message(
+                chat.id,
+                f"⚠️ کاربر <code>{user.id}</code> به تخلف تبلیغاتی پنجم رسید، "
+                "اما بی‌صدا کردن ناموفق بود؛ مجوز Restrict Members ربات را بررسی کن."
+            )
+        except Exception:
+            pass
+    save_data()
+    return True
+
+
 def process_group_security(message):
     chat,user=message.chat,message.from_user
     if not user or chat.type not in ("group","supergroup"): return False
@@ -1388,8 +1499,8 @@ def process_group_security(message):
     elif s.get("lock_mentions") and (re.search(r"(?<!\w)@[A-Za-z0-9_]{3,}", text or "") or any(getattr(e, "type", "") in ("mention", "text_mention") for e in (getattr(message, "entities", None) or []))): reason="ارسال تگ یا منشن در حالت قفل"
     elif s.get("lock_hashtags") and (re.search(r"(?<!\w)#[\w\u0600-\u06ff]+", text or "") or any(getattr(e, "type", "") == "hashtag" for e in (getattr(message, "entities", None) or []))): reason="ارسال هشتگ در حالت قفل"
     elif s.get("lock_usernames") and re.search(r"(?<!\w)@[A-Za-z0-9_]{5,}", text or ""): reason="ارسال نام کاربری در حالت قفل"
+    elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ/تبچی"
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
-    elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
     elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
     if not reason and text and s.get("anti_repeat") and normalize_security_text(prev.get("normalized", prev.get("text", ""))) == normalize_security_text(text) and normalize_security_text(text) and now-prev.get("time",0)<30: reason="پیام تکراری یا با تغییرات جزئی"
@@ -1401,7 +1512,11 @@ def process_group_security(message):
             DATA["stats"]["blocked"]+=1
             group_stats=DATA.setdefault("group_stats",{}).setdefault(str(chat.id),{"messages":0,"blocked":0,"joins":0,"leaves":0})
             group_stats["blocked"]=int(group_stats.get("blocked",0))+1
-            add_log("blocked",chat.id,user.id,reason); warn_member(chat.id,user.id,reason)
+            add_log("blocked",chat.id,user.id,reason)
+            if reason.startswith("ارسال تبلیغ/تبچی"):
+                handle_tapchi_violation(message, reason)
+            else:
+                warn_member(chat.id,user.id,reason)
         return True
     save_data(); return False
 
@@ -4294,34 +4409,52 @@ function speed(){let n=0,b=btn("شروع کن و سریع بزن",()=>{n++;b.tex
 $("again").onclick=()=>start(current,false);$("reset").onclick=()=>start(current,true);renderGallery();start(-1,false);
 </script></body></html>"""
 class _GameRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path in ("/", "/healthz", "/health", "/ready"):
-            body = "مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈 is running".encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if path in ("/game", "/game/"):
-            body = GAME_HTML.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        body = b"Not found"
-        self.send_response(404)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
+    protocol_version = "HTTP/1.1"
+
+    def _send(self, status, body, content_type="text/plain; charset=utf-8", cache="no-store"):
+        payload = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            # Browsers and health checks may disconnect before the response finishes.
+            pass
+
+    def do_GET(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path in ("/", "/healthz", "/health", "/ready"):
+            self._send(200, "مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈 is running")
+            return
+        if path == "/game":
+            self._send(200, GAME_HTML, "text/html; charset=utf-8")
+            return
+        if path == "/favicon.ico":
+            self._send(204, b"", "image/x-icon")
+            return
+        self._send(404, "این صفحه پیدا نشد. صفحهٔ بازی: /game")
+
+    def do_HEAD(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path in ("/", "/healthz", "/health", "/ready", "/game"):
+            body = GAME_HTML.encode("utf-8") if path == "/game" else b"ok"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Type", "text/html; charset=utf-8" if path == "/game" else "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+        else:
+            self.send_error(404)
 
     def log_message(self, fmt, *args):
-        return
+        # Keep routine health checks quiet; report actual server errors for debugging.
+        if args and str(args[1:2]).startswith(("4", "5")):
+            print("Game web request:", fmt % args)
 
 BOT_SHORT_DESCRIPTION = (
     "امنیت گروه، مدیریت اعضا، دستیار هوشمند، ابزارهای کاربردی و بازی‌های تلگرامی"
@@ -4364,7 +4497,7 @@ if __name__ == "__main__":
     try:
         start_game_web_server()
     except Exception as web_error:
-        print("Web server could not start:", repr(web_error))
+        print("WEB GAME SERVER STARTUP FAILED:", repr(web_error))
     try:
         bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
     except Exception as e:
