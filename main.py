@@ -300,8 +300,8 @@ def start_welcome_text(user):
         "🚀 <b>امکانات اصلی</b>\n"
         "🔐 <b>امنیت گروه:</b> کنترل لینک و تبلیغات، ضداسپم و تکرار، کنترل فوروارد و رسانه، فیلتر شماره تماس، کلمات ممنوع، کپچا و ابزارهای امنیت هوشمند.\n"
         "👥 <b>مدیریت اعضا:</b> اخطار، سکوت و رفع سکوت، مسدودسازی و آزادسازی، اخراج، گزارش تخلف، سنجاق و پاک‌سازی پیام‌ها با فرمان مجاز.\n"
-        "👋 <b>مدیریت ورود و خروج:</b> خوشامدگویی، خداحافظی، تنظیم متن و تصویر خوشامد، تأیید ورود و کنترل ضدیورش.\\n"
-        "📢 <b>الزام ورود:</b> جوین اجباری کانال‌های تنظیم‌شده و الزام دعوت اعضا با لینک اختصاصی، در صورت فعال‌سازی مدیر گروه.\\n"
+        "👋 <b>مدیریت ورود و خروج:</b> خوشامدگویی، خداحافظی، تنظیم متن و تصویر خوشامد، تأیید ورود و کنترل ضدیورش.\n"
+        "📢 <b>الزام ورود:</b> جوین اجباری کانال‌های تنظیم‌شده و الزام دعوت اعضا با لینک اختصاصی، در صورت فعال‌سازی مدیر گروه.\n"
         "⚙️ <b>ابزارهای گروه:</b> قوانین، پاسخ خودکار، فرمان اختصاصی، یادداشت‌ها، اطلاعیه، آمار و گزارش فعالیت.\n"
         "🧠 <b>دستیار هوشمند:</b> راهنمایی دربارهٔ امکانات و درخواست‌های پشتیبانی‌شده؛ اجرای تغییرات گروه فقط پس از بررسی دسترسی مدیر انجام می‌شود.\n"
         "🎨 <b>ابزارهای جانبی:</b> تبدیل متن به سبک‌های فونت، فهرست پروکسی‌های ذخیره‌شده، تیکت پشتیبانی و بازی‌های سرگرمی.\n"
@@ -330,8 +330,8 @@ def group_start_guide(chat_title="گروه"):
         "👋 سلام! برای مدیریت گروه، ربات باید مدیر گروه باشد و مجوزهای لازم را داشته باشد.\n\n"
         "🔐 تنظیمات پنل و مدیریت مالک در گفت‌وگوی خصوصی ربات انجام می‌شود؛ پیام‌های پنل در گروه منتشر نمی‌شوند.\n"
         "🧰 مدیران گروه می‌توانند از فرمان‌های فارسی پشتیبانی‌شده استفاده کنند؛ برای اقدام روی یک عضو، روی پیام همان عضو ریپلای کنید.\n"
-        "📜 برای دیدن قوانین بنویسید «قوانین»، برای آمار «آمار»، و برای راهنمای فرمان‌ها «راهنما».\\n"
-        "📢 اگر جوین اجباری روشن باشد، باید عضو کانال‌های نمایش‌داده‌شده باشید. برای لینک دعوت اختصاصی، در گروه /mylink را بزنید (در صورت فعال بودن اد اجباری).\\n"
+        "📜 برای دیدن قوانین بنویسید «قوانین»، برای آمار «آمار»، و برای راهنمای فرمان‌ها «راهنما».\n"
+        "📢 اگر جوین اجباری روشن باشد، باید عضو کانال‌های نمایش‌داده‌شده باشید. برای لینک دعوت اختصاصی، در گروه /mylink را بزنید (در صورت فعال بودن اد اجباری).\n"
         "⚠️ بعضی امکانات فقط با مجوز فعال گروه و دسترسی ادمین ربات کار می‌کنند."
     )
 
@@ -3058,7 +3058,7 @@ def callback_handler(call):
                     return
                 WAITING[uid] = {"action": "payment_receipt", "request_id": rid}
                 bot.answer_callback_query(call.id)
-                bot.send_message(uid, f"📤 لطفاً عکس رسید پرداخت را همین‌جا ارسال کن.\\nشناسه درخواست: <code>{esc(rid)}</code>\\nشناسه عددی تلگرام تو: <code>{uid}</code>\\nتا بررسی مالک، اشتراک فعال نمی‌شود.")
+                bot.send_message(uid, f"📤 لطفاً عکس رسید پرداخت را همین‌جا ارسال کن.\nشناسه درخواست: <code>{esc(rid)}</code>\nشناسه عددی تلگرام تو: <code>{uid}</code>\nتا بررسی مالک، اشتراک فعال نمی‌شود.")
                 return
             if data=="user:home":
                 bot.answer_callback_query(call.id); bot.send_message(uid,public_features_text(),reply_markup=public_keyboard()); return
@@ -3961,6 +3961,31 @@ class _GameRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
+BOT_SHORT_DESCRIPTION = (
+    "امنیت گروه، مدیریت اعضا، دستیار هوشمند، ابزارهای کاربردی و بازی‌های تلگرامی"
+)
+BOT_LONG_DESCRIPTION = (
+    "🛡️ MASIH GUARD S1000+ — دستیار مدیریت و امنیت تلگرام. "
+    "امکانات: ضدلینک و ضداسپم، کنترل رسانه و فوروارد، خوشامدگویی و کپچا، "
+    "اخطار و مدیریت اعضا، قوانین و پاسخ خودکار، آمار گروه، دستیار هوشمند، "
+    "تبدیل متن به فونت‌های تزئینی، تیکت پشتیبانی، بازی‌ها، کیف پول تومانی و اشتراک. "
+    "برخی قابلیت‌ها به مجوز نصب، دسترسی ادمین و تنظیم سرویس‌های بیرونی نیاز دارند. "
+    "برای دیدن راهنما و منو، ربات را Start کنید."
+)
+
+def sync_bot_profile_descriptions():
+    """Publish the public About/Description shown before a user starts the bot."""
+    short_description = (os.getenv("BOT_SHORT_DESCRIPTION") or BOT_SHORT_DESCRIPTION).strip()[:120]
+    description = (os.getenv("BOT_DESCRIPTION") or BOT_LONG_DESCRIPTION).strip()[:512]
+    try:
+        bot.set_my_short_description(short_description)
+        bot.set_my_description(description)
+        print("Bot profile descriptions synchronized.")
+    except Exception as profile_error:
+        # Profile settings must never prevent the bot from starting.
+        print("Bot profile description update skipped:", repr(profile_error))
+
+
 def start_game_web_server():
     port = int(os.getenv("PORT", "10000"))
     server = ThreadingHTTPServer(("0.0.0.0", port), _GameRequestHandler)
@@ -3973,6 +3998,7 @@ def start_game_web_server():
 if __name__ == "__main__":
     print(f"{BRAND} {VERSION}: starting web server and polling")
     print("Configuration: BOT_TOKEN=set; AI=" + ("enabled" if AI_API_KEY else "not configured") + "; web game uses WEB_GAME_URL or RENDER_EXTERNAL_URL")
+    sync_bot_profile_descriptions()
     try:
         start_game_web_server()
     except Exception as web_error:
