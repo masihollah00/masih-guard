@@ -64,7 +64,7 @@ BOT_ID = 0
 STARTED_AT = time.time()
 
 DEFAULT_GROUP = {
-    "anti_link": True, "anti_ads": True, "anti_spam": True, "anti_repeat": True, "anti_raid_on": False, "raid_mode_until": 0,
+    "anti_link": True, "anti_ads": True, "anti_tapchi": True, "anti_spam": True, "anti_repeat": True, "anti_raid_on": False, "raid_mode_until": 0,
     "anti_forward": False, "media_lock": False, "lock_mentions": False, "lock_hashtags": False, "lock_usernames": False, "welcome_on": True,
     "farewell_on": False, "join_approval": False, "bad_words": [], "whitelist": [],
     "force_join_on": False, "force_join_channels": [], "force_add_on": False, "force_add_count": 3, "force_add_credits": {}, "invite_links": [],
@@ -90,7 +90,7 @@ DEFAULT_DATA = {
     "users": {}, "referrals": {}, "subscriptions": {}, "transactions": {}, "captchas": {}, "join_times": {}, "force_add_credits": {}, "force_invite_links": {}, "tapchi_violations": {},
     "subscription_requests": {}, "payout_requests": {},
     "last_daily": {}, "group_licenses": {}, "join_requests": {}, "group_requests": {},
-    "group_stats": {}, "active_members": {}, "manager_roles": {}, "bot_admins": {}
+    "group_stats": {}, "active_members": {}, "activity_stats": {}, "manager_roles": {}, "bot_admins": {}
 }
 
 def clone(obj): return json.loads(json.dumps(obj, ensure_ascii=False))
@@ -507,7 +507,7 @@ def main_keyboard():
 def section_keyboard(section):
     kb = types.InlineKeyboardMarkup(row_width=1)
     choices = {
-      "security":[("🔗 ضد لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist"),
+      "security":[("🔗 قفل لینک","toggle:anti_link"),("📢 ضد تبلیغ","toggle:anti_ads"),("🚫 قفل تبچی","toggle:anti_tapchi"),("🚫 ضد اسپم","toggle:anti_spam"),("🔁 ضد پیام تکراری","toggle:anti_repeat"),("↪️ ضد فوروارد","toggle:anti_forward"),("🖼 قفل رسانه","toggle:media_lock"),("🔗 قفل لینک و نام کاربری","toggle:anti_link"),("📵 فیلتر شماره تماس","toggle:phone_filter"),("🖼 قفل عکس","toggle:lock_photos"),("🎞 قفل فیلم","toggle:lock_videos"),("📁 قفل فایل","toggle:lock_files"),("🎭 قفل استیکر و گیف","toggle:lock_stickers"),("🎙 قفل پیام صوتی","toggle:lock_voice"),("⭕ قفل ویدئوی گرد","toggle:lock_video_notes"),("📂 فهرست کاربران مجاز","show:whitelist"),("➕ افزودن کاربر مجاز","ask:add_whitelist"),("➖ حذف کاربر مجاز","ask:remove_whitelist"),
       ("🧠 امنیت هوشمند این گروه","toggle:group_smart_security"),("🚨 ضد یورش ورود","toggle:anti_raid_on"),("🌙 ساعت سکوت شبانه","ask:quiet_hours"),("🆔 شناسه و تنظیمات گروه","ask:group_settings")],
       "welcome":[("👋 پیام خداحافظی","toggle:farewell_on"),("🛂 تأیید خودکار ورود","toggle:join_approval"),("📢 تنظیم جوین اجباری","ask:force_join"),("➕ تنظیم اد اجباری","ask:force_add"),("✏️ تنظیم متن خوشامد","ask:welcome_text"),("✏️ تنظیم متن خداحافظی","ask:farewell_text"),
       ("🖼 تنظیم تصویر خوشامد","ask:welcome_image"),("🗑 زمان حذف خوشامد","ask:welcome_delete_seconds"),("🔐 تأیید عضو جدید (کپچا)","toggle:captcha_on")],
@@ -525,7 +525,7 @@ def section_keyboard(section):
       "status":[("🚀 وضعیت ربات","show:status")],
       "licenses":[("➕ فعال‌سازی مجوز گروه","ask:activate_group"),("🗓 تمدید مجوز گروه","ask:extend_group"),("⛔ لغو مجوز گروه","ask:revoke_group"),("📋 فهرست گروه‌های مجاز","show:group_licenses"),("📨 درخواست‌های نصب","show:group_requests")],
       "full_control":[
-        ("🔗 قفل لینک","toggle:anti_link"),("📢 قفل تبلیغات","toggle:anti_ads"),
+        ("🔗 قفل لینک","toggle:anti_link"),("📢 قفل تبلیغات","toggle:anti_ads"),("🚫 قفل تبچی","toggle:anti_tapchi"),
         ("🚫 قفل اسپم","toggle:anti_spam"),("🔁 قفل پیام تکراری","toggle:anti_repeat"),
         ("↪️ قفل فوروارد","toggle:anti_forward"),("🖼 قفل همه رسانه‌ها","toggle:media_lock"),
         ("🏷 قفل تگ/منشن","toggle:lock_mentions"),("#️⃣ قفل هشتگ","toggle:lock_hashtags"),
@@ -570,8 +570,8 @@ GROUP_PANEL_SECTIONS = {
     "security": {
         "title": "🛡 امنیت و ضداسپم",
         "toggles": [
-            ("🔗 ضد لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
-            ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
+            ("🔗 قفل لینک", "anti_link"), ("📢 ضد تبلیغ", "anti_ads"),
+            ("🚫 قفل تبچی", "anti_tapchi"), ("🚫 ضد اسپم", "anti_spam"), ("🔁 ضد تکرار", "anti_repeat"),
             ("↪️ ضد فوروارد", "anti_forward"), ("🧠 امنیت هوشمند", "smart_security"),
             ("🚨 ضد یورش", "anti_raid_on"), ("🔐 کپچا", "captcha_on"),
         ],
@@ -1124,6 +1124,12 @@ def decide_payout_request(rid, paid, owner_uid):
 # ---------------- Security and moderation ----------------
 def get_text(message): return getattr(message, "text", None) or getattr(message, "caption", None) or ""
 def has_link(text): return bool(re.search(r"(https?://|www\.|t\.me/|telegram\.me/|@[A-Za-z0-9_]{5,})", text or "", re.I))
+def has_tapchi(text):
+    """Detect explicit Persian tapchi/ad-bot solicitation phrases."""
+    value = normalize_security_text(text or "")
+    phrases = ("تبچی", "تبچیگری", "تبلیغچی", "تبلیغچیگری", "تبچی اومد", "تبچی اومدم", "تبلیغچی اومدم")
+    return any(normalize_security_text(phrase) in value for phrase in phrases)
+
 def has_ad(text):
     """Conservative Persian/English ad detector; avoid treating every link as an ad."""
     value = normalize_security_text(text or "")
@@ -1132,7 +1138,6 @@ def has_ad(text):
         "عضوگیری", "کسب درآمد تضمینی", "درآمد تضمینی", "تبلیغ رایگان",
         "افزایش ممبر", "افزایش فالوور", "فالوور رایگان", "بازدید رایگان",
         "زیرمجموعه گیری", "زیرمجموعهگیری", "پنل فروش", "پنل ممبر",
-        "تبچی", "تبچیگری", "تبلیغچی", "تبلیغچیگری",
         "buy members", "buy followers", "cheap followers", "earn money guaranteed",
         "promotion service", "advertise here"
     )
@@ -1499,7 +1504,8 @@ def process_group_security(message):
     elif s.get("lock_mentions") and (re.search(r"(?<!\w)@[A-Za-z0-9_]{3,}", text or "") or any(getattr(e, "type", "") in ("mention", "text_mention") for e in (getattr(message, "entities", None) or []))): reason="ارسال تگ یا منشن در حالت قفل"
     elif s.get("lock_hashtags") and (re.search(r"(?<!\w)#[\w\u0600-\u06ff]+", text or "") or any(getattr(e, "type", "") == "hashtag" for e in (getattr(message, "entities", None) or []))): reason="ارسال هشتگ در حالت قفل"
     elif s.get("lock_usernames") and re.search(r"(?<!\w)@[A-Za-z0-9_]{5,}", text or ""): reason="ارسال نام کاربری در حالت قفل"
-    elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ/تبچی"
+    elif s.get("anti_tapchi") and has_tapchi(text): reason="ارسال تبلیغ/تبچی"
+    elif s.get("anti_ads") and has_ad(text): reason="ارسال تبلیغ"
     elif s.get("anti_link") and has_link(text) and str(user.id) not in [str(x) for x in s.get("whitelist",[])]: reason="ارسال لینک"
     elif s.get("phone_filter") and re.search(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", text): reason="ارسال شماره تماس در حالت فیلتر شماره"
     elif text and any(w and str(w).casefold() in text.casefold() for w in s.get("bad_words",[])): reason="استفاده از کلمه ممنوع"
@@ -1541,6 +1547,7 @@ _GROUP_ALIASES = {
     "report": "report", "گزارش": "report", "گزارش‌تخلف": "report",
     "قفل لینک": "set_anti_link_on", "ضدلینک روشن": "set_anti_link_on", "بازکردن لینک": "set_anti_link_off", "ضدلینک خاموش": "set_anti_link_off",
     "قفل تبلیغ": "set_anti_ads_on", "ضدتبلیغ روشن": "set_anti_ads_on", "بازکردن تبلیغ": "set_anti_ads_off", "ضدتبلیغ خاموش": "set_anti_ads_off",
+    "قفل تبچی": "set_anti_tapchi_on", "قفل تپچی": "set_anti_tapchi_on", "ضدتبچی روشن": "set_anti_tapchi_on", "بازکردن تبچی": "set_anti_tapchi_off", "ضدتبچی خاموش": "set_anti_tapchi_off",
     "ضد اسپم روشن": "set_anti_spam_on", "ضد اسپم خاموش": "set_anti_spam_off", "ضدتکرار روشن": "set_anti_repeat_on", "ضدتکرار خاموش": "set_anti_repeat_off",
     "قفل فوروارد": "set_anti_forward_on", "بازکردن فوروارد": "set_anti_forward_off",
     "قفل رسانه": "set_media_lock_on", "بازکردن رسانه": "set_media_lock_off",
@@ -1755,7 +1762,7 @@ def _handle_group_shortcut(message, text):
         setting_action = command[4:]
         enabled = setting_action.endswith("_on")
         setting = setting_action[:-3] if enabled else setting_action[:-4]
-        allowed_settings = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "lock_mentions", "lock_hashtags", "lock_usernames", "phone_filter"}
+        allowed_settings = {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "farewell_on", "join_approval", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "lock_mentions", "lock_hashtags", "lock_usernames", "phone_filter"}
         if setting not in allowed_settings:
             safe_reply_to(message, "⚠️ این تنظیم شناخته نشد.")
             return True
@@ -1763,7 +1770,7 @@ def _handle_group_shortcut(message, text):
             safe_reply_to(message, "⛔ فقط مدیران گروه می‌توانند تنظیمات امنیتی را تغییر دهند.")
             return True
         # Do not enable moderation filters that the bot cannot enforce due to missing Telegram rights.
-        deletion_filters = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock",
+        deletion_filters = {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "media_lock",
                             "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice",
                             "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}
         required_permission = "can_delete_messages" if setting in deletion_filters else (
@@ -1926,6 +1933,7 @@ def handle_ai_group_management(message, text=None):
     patterns = [
         (("قفللینک", "ضدلینک"), "anti_link"),
         (("قفلتبلیغ", "ضدتبلیغ"), "anti_ads"),
+        (("قفلتبچی", "قفل تپچی", "ضدتبچی", "ضدتپچی"), "anti_tapchi"),
         (("ضداسپم", "قفلاسپم"), "anti_spam"),
         (("ضدتکرار", "قفلپیامتکراری"), "anti_repeat"),
         (("قفلرسانه", "قفرسانه"), "media_lock"),
@@ -1965,7 +1973,7 @@ def handle_ai_group_management(message, text=None):
         safe_reply_to(message, "⛔ برای تغییر تنظیمات امنیتی باید مدیر همین گروه باشی.")
         return True
     enabled = bool(is_on and not is_off)
-    if enabled and target_setting in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}:
+    if enabled and target_setting in {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}:
         try:
             me = bot.get_me()
             member = bot.get_chat_member(chat_id, me.id)
@@ -1980,7 +1988,7 @@ def handle_ai_group_management(message, text=None):
     save_data()
     add_log("ai_group_setting_changed", chat_id, user_id, f"{target_setting}={enabled}")
     label = {
-        "anti_link": "ضدلینک", "anti_ads": "ضدتبلیغ", "anti_spam": "ضداسپم",
+        "anti_link": "قفل لینک", "anti_ads": "ضدتبلیغ", "anti_tapchi": "قفل تبچی", "anti_spam": "ضداسپم",
         "anti_repeat": "ضدتکرار", "media_lock": "قفل رسانه",
         "welcome_on": "خوشامدگویی", "farewell_on": "خداحافظی",
         "lock_photos": "قفل عکس", "lock_videos": "قفل فیلم", "lock_files": "قفل فایل",
@@ -1990,6 +1998,78 @@ def handle_ai_group_management(message, text=None):
     }.get(target_setting, target_setting)
     safe_reply_to(message, f"✅ {label} {'روشن' if enabled else 'خاموش'} شد.")
     return True
+
+
+def tag_menu_keyboard():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("👥 اعضای شناخته‌شده", callback_data="tagmenu:all"),
+           types.InlineKeyboardButton("⚡ فعال‌های ۲۴ ساعت", callback_data="tagmenu:active"))
+    kb.row(types.InlineKeyboardButton("👑 مدیران گروه", callback_data="tagmenu:admins"),
+           types.InlineKeyboardButton("🌙 کم‌فعال‌ها", callback_data="tagmenu:low"))
+    kb.row(types.InlineKeyboardButton("🔢 انتخاب تعداد", callback_data="tagmenu:count"))
+    return kb
+
+
+def tag_count_keyboard(mode):
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    buttons = [
+        types.InlineKeyboardButton("۲۰ نفر", callback_data=f"tagrun:{mode}:20"),
+        types.InlineKeyboardButton("۵۰ نفر", callback_data=f"tagrun:{mode}:50"),
+        types.InlineKeyboardButton("۱۰۰ نفر", callback_data=f"tagrun:{mode}:100"),
+        types.InlineKeyboardButton("۲۰۰ نفر", callback_data=f"tagrun:{mode}:200"),
+        types.InlineKeyboardButton("همهٔ موجود", callback_data=f"tagrun:{mode}:0"),
+    ]
+    for b in buttons: kb.add(b)
+    kb.add(types.InlineKeyboardButton("⬅️ برگشت", callback_data="tagmenu:back"))
+    return kb
+
+
+def run_tag_selection(chat_id, requester_id, mode, requested_count):
+    """Mention only users the bot has observed or can fetch as group admins."""
+    group_key = str(chat_id)
+    activity = DATA.setdefault("activity_stats", {}).setdefault(group_key, {})
+    known_ids = set(DATA.setdefault("active_members", {}).setdefault(group_key, {}).keys()) | set(activity.keys())
+    known_ids.discard(str(requester_id))
+    now = time.time()
+    if mode == "admins":
+        try:
+            selected_ids = [str(a.user.id) for a in bot.get_chat_administrators(chat_id) if not getattr(a.user, "is_bot", False)]
+            selected_ids = [x for x in selected_ids if x != str(requester_id)]
+        except Exception:
+            return "⚠️ نتونستم فهرست مدیران را از تلگرام بگیرم؛ دوباره تلاش کن."
+    elif mode == "active":
+        selected_ids = [x for x in known_ids if now - float(activity.get(x, {}).get("last_at", DATA["active_members"].get(group_key, {}).get(x, 0)) or 0) <= 86400]
+    elif mode == "low":
+        selected_ids = sorted(known_ids, key=lambda x: (int(activity.get(x, {}).get("messages", 0) or 0), float(activity.get(x, {}).get("last_at", 0) or 0)))
+    else:
+        selected_ids = sorted(known_ids, key=lambda x: float(activity.get(x, {}).get("last_at", DATA["active_members"].get(group_key, {}).get(x, 0)) or 0), reverse=True)
+    # Avoid an accidental flood; a single action can mention at most 200 known users.
+    cap = 200
+    if requested_count > 0:
+        selected_ids = selected_ids[:min(requested_count, cap)]
+    else:
+        selected_ids = selected_ids[:cap]
+    if not selected_ids:
+        return "ℹ️ هنوز عضوی برای این فهرست ثبت نشده یا در بازهٔ انتخابی فعالیتی دیده نشده است. آمار از زمان فعال‌بودن ثبت ربات جمع می‌شود."
+    chunks = [selected_ids[i:i+20] for i in range(0, len(selected_ids), 20)]
+    sent = 0
+    for ci, chunk in enumerate(chunks, 1):
+        mentions = []
+        for member_id in chunk:
+            try:
+                cm = bot.get_chat_member(chat_id, int(member_id)); user = cm.user
+                name = " ".join(x for x in [getattr(user, "first_name", ""), getattr(user, "last_name", "")] if x).strip() or "عضو"
+            except Exception:
+                name = "عضو"
+            mentions.append(f'<a href="tg://user?id={int(member_id)}">{esc(name)}</a>')
+        try:
+            bot.send_message(chat_id, f"🏷️ <b>تگ اعضا {ci}/{len(chunks)}</b>\n" + " ، ".join(mentions), disable_web_page_preview=True)
+            sent += len(chunk)
+        except Exception as exc:
+            print("Tag send error:", repr(exc))
+            break
+    add_log("group_tag", chat_id, requester_id, f"mode={mode}; requested={requested_count}; sent={sent}")
+    return f"✅ تگ انجام شد: {sent} نفر در دسته‌های حداکثر ۲۰ نفره.\nℹ️ تلگرام فهرست کامل اعضا را آزادانه ارائه نمی‌کند؛ «همه» یعنی همهٔ اعضای قابل‌شناسایی ثبت‌شده، تا سقف ایمنی ۲۰۰ نفر."
 
 
 def group_message_handler(message):
@@ -2140,29 +2220,13 @@ def group_message_handler(message):
             safe_reply_to(message, proxy_list_text(limit=20, with_ping=True)); return
         if compact_group in {"فونت", "لیستفونت", "فونتها", "لیستفونتها", "فونتلیست", "فونتلیستها", "فونت۲۰۰", "فونت200", "font", "fonts", "fontlist"}:
             safe_reply_to(message, "🔤 متن یا اسم دلخواهت رو در پیوی ربات بفرست تا ۲۰۰ مدل فونت فانتزی بسازم."); return
-        # Tag only users the bot has actually observed; Telegram Bot API cannot enumerate all group members.
-        tag_match = re.fullmatch(r"(?:تگ|تگکن|منشن)\s*(\d{1,3})?", normalized_text.replace("‌", " ").strip())
+        # «تگ» opens a selection menu; it never tags a guessed list immediately.
+        tag_match = re.fullmatch(r"(?:تگ|تگکن|منشن)(?:\s*\d{1,3})?", normalized_text.replace("‌", " ").strip())
         if tag_match:
             uid = getattr(getattr(message, "from_user", None), "id", 0)
             if not is_group_admin(message.chat.id, uid):
-                safe_reply_to(message, "⛔ تگ گروهی فقط برای مدیران و مالک مجاز است."); return
-            count = min(100, max(1, int(tag_match.group(1) or 50)))
-            known = list(DATA.setdefault("active_members", {}).setdefault(str(message.chat.id), {}).keys())
-            known = [x for x in known if str(x) != str(uid)]
-            if not known:
-                safe_reply_to(message, "هنوز شناسه‌ای از اعضای فعال این گروه ثبت نشده. اعضا باید پیام بدهند؛ تلگرام اجازهٔ گرفتن فهرست کامل اعضا را به ربات نمی‌دهد."); return
-            selected=known[-count:]
-            chunks=[selected[i:i+20] for i in range(0,len(selected),20)]
-            for ci, chunk in enumerate(chunks,1):
-                mentions=[]
-                for member_id in chunk:
-                    try:
-                        cm=bot.get_chat_member(message.chat.id,int(member_id)); user=cm.user
-                        nm=" ".join(x for x in [getattr(user,"first_name", ""),getattr(user,"last_name","")] if x).strip() or "عضو"
-                    except Exception: nm="عضو"
-                    mentions.append(f'<a href="tg://user?id={int(member_id)}">{esc(nm)}</a>')
-                bot.send_message(message.chat.id, f"🏷️ <b>تگ اعضا {ci}/{len(chunks)}</b>\n"+" ، ".join(mentions), disable_web_page_preview=True)
-            add_log("group_tag",message.chat.id,uid,f"requested={count}; sent={len(selected)}")
+                safe_reply_to(message, "⛔ منوی تگ گروهی فقط برای مدیران گروه مجاز است."); return
+            safe_reply_to(message, "🏷️ <b>تگ هوشمند اعضای گروه</b>\nانتخاب کن چه کسانی تگ شوند. فعالیت‌ها از زمان ثبت‌شدن توسط ربات محاسبه می‌شوند.", reply_markup=tag_menu_keyboard())
             return
         if normalized_text in {"ربات", "دستیار", "هوش", "هوش مصنوعی"}:
             safe_reply_to(message, "جانم! 🌹 برای سؤال، بنویس «ربات سؤال تو» یا «هوش سؤال تو». برای تغییر تنظیمات، دستور را روشن و واضح بنویس؛ مثلاً «قفل لینک روشن کن». ")
@@ -2289,6 +2353,15 @@ def group_message_handler(message):
                     except Exception: pass
                 safe_reply_to(message,f"🧹 {deleted} پیام قابل‌حذف از عضو موردنظر پاک شد."); add_log("member_messages_cleaned",message.chat.id,message.from_user.id,f"target={target_user}, deleted={deleted}"); return
         DATA["stats"]["messages"]+=1
+        # Track only activity observed from actual messages; Telegram does not expose a full member list.
+        activity_uid = getattr(getattr(message, "from_user", None), "id", None)
+        if activity_uid and not getattr(message.from_user, "is_bot", False):
+            group_key, member_key = str(message.chat.id), str(activity_uid)
+            DATA.setdefault("active_members", {}).setdefault(group_key, {})[member_key] = time.time()
+            group_activity = DATA.setdefault("activity_stats", {}).setdefault(group_key, {})
+            activity_record = group_activity.setdefault(member_key, {"messages": 0, "last_at": 0})
+            activity_record["messages"] = int(activity_record.get("messages", 0) or 0) + 1
+            activity_record["last_at"] = time.time()
         if process_group_security(message): return
         if text:
             settings=get_group_settings(message.chat.id)
@@ -2961,6 +3034,39 @@ def game_command(message):
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
+        if data.startswith("tagmenu:") or data.startswith("tagrun:"):
+            if not call.message or call.message.chat.type not in ("group", "supergroup"):
+                bot.answer_callback_query(call.id, "این منو فقط داخل گروه کار می‌کند.", show_alert=True); return
+            if not is_group_admin(chat_id, uid):
+                bot.answer_callback_query(call.id, "فقط مدیر گروه می‌تواند از تگ گروهی استفاده کند.", show_alert=True); return
+            if data == "tagmenu:back":
+                bot.answer_callback_query(call.id)
+                bot.edit_message_text("🏷️ <b>تگ هوشمند اعضای گروه</b>\nچه کسانی را می‌خواهی تگ کنی؟", chat_id, call.message.message_id, reply_markup=tag_menu_keyboard())
+                return
+            if data.startswith("tagmenu:"):
+                mode = data.split(":", 1)[1]
+                bot.answer_callback_query(call.id)
+                if mode == "count":
+                    bot.edit_message_text("🔢 <b>تعداد تگ اعضای شناخته‌شده</b>\nتعداد دلخواه را انتخاب کن. برای انتخاب نوع دیگر اعضا، به منوی قبلی برگرد.", chat_id, call.message.message_id, reply_markup=tag_count_keyboard("all"))
+                    return
+                labels = {"all":"اعضای شناخته‌شده", "active":"فعال‌های ۲۴ ساعت اخیر", "admins":"مدیران گروه", "low":"کم‌فعال‌ها"}
+                if mode not in labels:
+                    bot.answer_callback_query(call.id, "گزینه نامعتبر است.", show_alert=True); return
+                bot.edit_message_text(f"🏷️ <b>تگ {labels[mode]}</b>\nچند نفر تگ شوند؟", chat_id, call.message.message_id, reply_markup=tag_count_keyboard(mode))
+                return
+            if data.startswith("tagrun:"):
+                parts = data.split(":")
+                if len(parts) != 3 or parts[1] not in {"all", "active", "admins", "low"}:
+                    bot.answer_callback_query(call.id, "انتخاب نامعتبر است.", show_alert=True); return
+                try: count = int(parts[2])
+                except ValueError: bot.answer_callback_query(call.id, "تعداد نامعتبر است.", show_alert=True); return
+                if count not in {0, 20, 50, 100, 200}:
+                    bot.answer_callback_query(call.id, "تعداد پشتیبانی نمی‌شود.", show_alert=True); return
+                bot.answer_callback_query(call.id, "در حال آماده‌کردن فهرست…")
+                result = run_tag_selection(chat_id, uid, parts[1], count)
+                try: bot.edit_message_text("🏷️ <b>نتیجهٔ تگ</b>\n" + esc(result), chat_id, call.message.message_id, reply_markup=None)
+                except Exception: bot.send_message(chat_id, esc(result))
+                return
         if data.startswith("forcejoin:check:"):
             parts = data.split(":")
             if len(parts) != 4:
@@ -3153,13 +3259,13 @@ def callback_handler(call):
                 return
             if data.startswith("gpanel:toggle:"):
                 key = data.split(":", 2)[2]
-                allowed = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
+                allowed = {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
                 if key not in allowed:
                     bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
                     return
                 settings = get_group_settings(chat_id)
                 next_enabled = not bool(settings.get(key, False))
-                required_permission = "can_delete_messages" if key in {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"} else (
+                required_permission = "can_delete_messages" if key in {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"} else (
                     "can_restrict_members" if key in {"captcha_on", "anti_raid_on"} else
                     "can_invite_users" if key == "join_approval" else "")
                 if next_enabled and required_permission and not bot_has_group_permission(chat_id, required_permission):
@@ -4140,7 +4246,7 @@ def expanded_feature_commands(message):
             if not group_chat:
                 safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
             cfg = get_group_settings(chat.id)
-            labels = {"anti_link":"ضدلینک", "anti_ads":"ضدتبلیغ", "anti_spam":"ضداسپم", "anti_repeat":"ضدتکرار", "anti_forward":"ضدفوروارد", "media_lock":"قفل رسانه", "lock_photos":"قفل عکس", "lock_videos":"قفل ویدئو", "lock_files":"قفل فایل", "lock_stickers":"قفل استیکر", "lock_voice":"قفل ویس", "force_join_on":"جوین اجباری", "force_add_on":"اد اجباری", "welcome_on":"خوشامدگویی", "captcha_on":"کپچا"}
+            labels = {"anti_link":"قفل لینک", "anti_ads":"ضدتبلیغ", "anti_tapchi":"قفل تبچی", "anti_spam":"ضداسپم", "anti_repeat":"ضدتکرار", "anti_forward":"ضدفوروارد", "media_lock":"قفل رسانه", "lock_photos":"قفل عکس", "lock_videos":"قفل ویدئو", "lock_files":"قفل فایل", "lock_stickers":"قفل استیکر", "lock_voice":"قفل ویس", "force_join_on":"جوین اجباری", "force_add_on":"اد اجباری", "welcome_on":"خوشامدگویی", "captcha_on":"کپچا"}
             body = "\n".join(f"• {label}: {'روشن' if cfg.get(key) else 'خاموش'}" for key, label in labels.items())
             safe_reply_to(message, "⚙️ <b>تنظیمات فعلی گروه</b>\n" + body)
         elif command == "rules":
@@ -4482,7 +4588,7 @@ def sync_bot_profile_descriptions():
 
 
 def start_game_web_server():
-    port = int(os.getenv("PORT", "10000"))
+    port = int(os.getenv("PORT", "8080"))
     server = ThreadingHTTPServer(("0.0.0.0", port), _GameRequestHandler)
     thread = threading.Thread(target=server.serve_forever, name="game-web-server", daemon=True)
     thread.start()
