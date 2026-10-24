@@ -13,7 +13,8 @@ import telebot
 from telebot import types
 
 # ---------------- Configuration ----------------
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+# FadeHost uses TELEGRAM_BOT_TOKEN; prefer it so a stale BOT_TOKEN cannot override it.
+BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
 OWNER_ID = int(os.getenv("OWNER_ID", "8620924698"))
 DATA_FILE = os.getenv("DATA_FILE", "masih_guard_data.json")
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
