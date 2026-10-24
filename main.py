@@ -3014,103 +3014,50 @@ def cancel_command(message):
     else:
         safe_reply_to(message, "ℹ️ عملیات فعالی برای لغو وجود نداشت.")
 
-# ---------------- Random 50-mode arcade previews ----------------
-_ARCADE_TITLES = [
-    'شهر نئونی',
-    'پرش از پشت\u200cبام',
-    'مسیر مخفی',
-    'صعود از برج',
-    'مسابقه موانع',
-    'ثبت رکورد سرعت',
-    'مسیر پرپیچ\u200cوخم',
-    'مسابقه شبانه',
-    'فرار از تعقیب\u200cکننده',
-    'حرکت بی\u200cنقص',
-    'شکار کریستال',
-    'گنج پنهان',
-    'جمع\u200cآوری طلایی\u200cها',
-    'گنج مخفی',
-    'شکارچی حرفه\u200cای',
-    'فرار از ربات\u200cها',
-    'بقای زمان\u200cدار',
-    'خروج از منطقه',
-    'درِ خروج مخفی',
-    'آخرین فرصت',
-    'نجات شهر',
-    'فعال\u200cسازی برج',
-    'بازیابی انرژی',
-    'نجات محموله',
-    'عملیات اضطراری',
-    'صعود از کوهستان',
-    'عبور از پل',
-    'غار اسرارآمیز',
-    'مسیر یخی',
-    'قله نهایی',
-    'جنگل گمشده',
-    'معبد باستانی',
-    'نقشه گنج',
-    'مسیر ساحلی',
-    'فرار از جزیره',
-    'ایستگاه فضایی',
-    'بازیابی هسته',
-    'میدان گرانش',
-    'اکتشاف سیاره',
-    'ماموریت مداری',
-    'مسیر بی\u200cنقص',
-    'رکورد امتیاز',
-    'سرعت بالا',
-    'شکار زمان',
-    'چالش سخت',
-    'طوفان نهایی',
-    'دروازه اسرار',
-    'آزمون قهرمان',
-    'آخرین عملیات',
-    'مرحله افسانه\u200cای'
-]
+# ---------------- MASIH GUARD: 50 selectable arcade games ----------------
+_ARCADE_TITLES = ['مسابقه ماشین نئونی', 'موتورسواری خطرناک', 'فرار از پلیس', 'دریفت خیابانی', 'مسابقه جت فضایی', 'فرار از قطار', 'پرش با ماشین', 'مسابقه قایق', 'رکورد سرعت بی\u200cنهایت', 'مسیر پر از تله', 'پارکور روی پشت\u200cبام', 'برج بی\u200cنهایت', 'فرار از هزارتو', 'غار اسرارآمیز', 'گنج\u200cیابی', 'پرش روی سکوهای متحرک', 'فرار از سیل', 'ماجراجویی در جنگل', 'عبور از پل\u200cهای شکسته', 'فرار از معبد باستانی', 'نبرد فضایی', 'دفاع از پایگاه', 'زنده ماندن در موج دشمنان', 'نبرد ربات\u200cها', 'شکار کریستال', 'فرار از سیاره', 'دفاع برجکی', 'نبرد با غول آخر', 'میدان مین', 'مأموریت مخفی', 'حل معمای لیزر', 'جورچین رنگ\u200cها', 'هزارتوی زمان\u200cدار', 'پیدا کردن اشیای مخفی', 'رمزگشایی', 'حافظه تصویری', 'چالش واکنش سریع', 'شکستن رکورد پرش', 'ساخت مسیر', 'فرار از اتاق', 'فوتبال پنالتی', 'بسکتبال امتیازی', 'بولینگ', 'پینگ\u200cپنگ', 'بیلیارد', 'تیراندازی به هدف\u200cهای مجازی', 'پرتاب به سبد', 'مسابقه پهپاد', 'چالش تعادل', 'آرکید ترکیبی رکوردشکنی']
 ARCADE_GAMES = [{"id": i + 1, "title": title} for i, title in enumerate(_ARCADE_TITLES)]
 
 def _make_arcade_preview(game):
-    """Build an original animated GIF locally; no third-party image URL is needed."""
+    """Generate a moving preview that matches the selected game's visual family."""
     from PIL import Image, ImageDraw
     import math
-    frames = []
-    palette = [(39, 226, 211), (255, 190, 78), (151, 113, 255), (255, 93, 142), (93, 175, 255)]
-    accent = palette[(int(game["id"]) - 1) % len(palette)]
+    title = str(game.get("title", "بازی")); mode = int(game.get("id", 1)); family = (mode - 1) // 10
+    palettes = [(20,220,255),(255,180,60),(255,70,110),(170,110,255),(80,245,150)]
+    accent = palettes[family]; frames=[]
     for frame_no in range(8):
-        im = Image.new("RGB", (480, 270), (6, 13, 29))
-        d = ImageDraw.Draw(im)
-        for y in range(270):
-            c = int(15 + y * 0.12)
-            d.line((0, y, 480, y), fill=(5, min(35, c), min(60, c + 12)))
-        # Neon skyline and animated lights
-        for k in range(9):
-            x = k * 57 - 10
-            h = 45 + ((k * 29 + int(game["id"]) * 7) % 95)
-            d.rectangle((x, 190-h, x+39, 208), fill=(12, 25, 45), outline=(25, 74, 94), width=2)
-            for wy in range(198-h, 198, 16):
-                for wx in range(x+8, x+34, 12):
-                    if (wx + wy + frame_no * 4) % 3:
-                        d.rectangle((wx, wy, wx+3, wy+5), fill=accent)
-        d.polygon([(0, 212), (480, 212), (480, 270), (0, 270)], fill=(11, 19, 31))
-        d.line((0, 242, 480, 242), fill=accent, width=2)
-        # Animated hero and collectible
-        hx = 115 + frame_no * 12
-        d.ellipse((hx-13, 158, hx+13, 184), fill=(255, 220, 177), outline=(255, 255, 255))
-        d.rounded_rectangle((hx-16, 181, hx+16, 225), radius=7, fill=accent)
-        d.line((hx-8, 222, hx-15-frame_no%3, 244), fill=(222, 238, 255), width=7)
-        d.line((hx+8, 222, hx+16+frame_no%3, 244), fill=(222, 238, 255), width=7)
-        gx = 350 + int(9 * math.sin(frame_no * 0.8))
-        gy = 180 + int(8 * math.cos(frame_no * 0.8))
-        d.polygon([(gx, gy-17), (gx+13, gy), (gx, gy+17), (gx-13, gy)], fill=(255, 221, 93), outline=(255, 255, 255))
-        for q in range(5):
-            sx = (gx + q*23 + frame_no*11) % 470
-            sy = 130 + (q*19 % 60)
-            d.ellipse((sx, sy, sx+3, sy+3), fill=(220, 250, 255))
+        bg=[(5,12,30),(24,18,9),(10,8,28),(9,20,25),(12,12,25)][family]
+        im=Image.new("RGB",(480,270),bg); d=ImageDraw.Draw(im)
+        if family==0:  # racing track and car
+            d.polygon([(0,155),(480,155),(480,270),(0,270)],fill=(35,42,55)); d.polygon([(150,155),(330,155),(430,270),(50,270)],fill=(15,19,28))
+            for k in range(5):
+                y=(165+k*27+frame_no*8)%275; d.rectangle((235,y,245,y+13),fill=(255,255,230))
+            x=210+int(20*math.sin(frame_no*.7)); d.rounded_rectangle((x,190,x+62,229),radius=8,fill=accent,outline="white",width=2); d.rectangle((x+12,179,x+50,199),fill=(130,230,255))
+            for wx in (x+8,x+44): d.ellipse((wx,221,wx+14,239),fill=(5,5,8),outline=(230,240,255))
+        elif family==1:  # parkour platforms and jumper
+            d.rectangle((0,220,480,270),fill=(31,58,45))
+            for k in range(6):
+                x=k*86-15; y=190-((k*29+mode*7)%95); d.polygon([(x,y),(x+68,y-10),(x+80,y+8),(x+8,y+18)],fill=(55,76,92),outline=accent)
+            hx=90+frame_no*22; d.ellipse((hx,115,hx+22,137),fill=(255,218,177)); d.line((hx+11,138,hx+4,175),fill=accent,width=8); d.line((hx+5,174,hx-8,193),fill="white",width=5); d.polygon([(390,90),(405,105),(390,120),(375,105)],fill=(255,220,80))
+        elif family==2:  # space action
+            for k in range(42):
+                x=(k*67+frame_no*9)%480; y=(k*31)%210; d.ellipse((x,y,x+2,y+2),fill=(220,240,255))
+            d.polygon([(240,70),(268,140),(240,127),(212,140)],fill=accent,outline="white"); d.polygon([(240,170),(480,225),(480,270),(0,270),(0,225)],fill=(24,32,52))
+            for k in range(4):
+                x=(k*113+frame_no*13)%470; d.rectangle((x,180+(k%2)*18,x+24,205+(k%2)*18),fill=(90,30,55),outline=(255,90,120),width=2)
+        elif family==3:  # puzzle board
+            d.rectangle((35,30,445,240),fill=(18,34,50),outline=accent,width=3)
+            for yy in range(3):
+                for xx in range(5):
+                    x=65+xx*72; y=55+yy*58; c=palettes[(xx+yy+mode)%5]; d.rounded_rectangle((x,y,x+42,y+34),radius=5,fill=c if (xx+yy+frame_no)%4 else (235,245,255))
+        else:  # sports field and moving ball
+            d.rectangle((0,35,480,270),fill=(20,85,55))
+            for x in range(0,480,48): d.line((x,35,x,270),fill=(32,110,68),width=1)
+            d.rectangle((350,95,455,210),outline=(240,250,255),width=5); d.rectangle((375,125,430,180),outline=(255,255,255),width=4)
+            bx=115+frame_no*17; d.ellipse((bx,170,bx+28,198),fill=(255,255,255),outline=accent,width=3)
+        d.rounded_rectangle((12,10,350,38),radius=8,fill=(4,8,18),outline=accent,width=2); d.text((22,18),title[:30],fill=(245,250,255)); d.text((408,18),str(mode)+"/50",fill=accent)
         frames.append(im)
-    out = io.BytesIO()
-    frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:], duration=105, loop=0, optimize=True)
-    out.seek(0)
-    out.name = "masih-guard-arcade.gif"
+    out=io.BytesIO(); frames[0].save(out,format="GIF",save_all=True,append_images=frames[1:],duration=110,loop=0,optimize=True); out.seek(0); out.name="masih-guard-game-%02d.gif"%mode
     return out
 
 def send_random_game(message):
@@ -3118,18 +3065,26 @@ def send_random_game(message):
     if not game_url.startswith("https://"):
         safe_reply_to(message, "⚠️ آدرس امن بازی تنظیم نشده است. متغیر WEB_GAME_URL را روی https://masih-guard.fadehost.app/game قرار بده.")
         return
-    game = random.choice(ARCADE_GAMES)
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for game in ARCADE_GAMES:
+        kb.add(types.InlineKeyboardButton("🎮 %02d. %s" % (game["id"], game["title"]), callback_data="arcade:play:%d" % game["id"]))
+    safe_reply_to(message, "🎮 <b>آرکید مسیح هکرینگ | ۵۰ بازی</b>\nیکی از ۵۰ بازی را انتخاب کن؛ پیش‌نمایش مخصوص همان بازی فرستاده می‌شود.", reply_markup=kb)
+
+def send_selected_game(call, game_id):
+    game = next((g for g in ARCADE_GAMES if int(g["id"]) == int(game_id)), None)
+    if not game:
+        bot.answer_callback_query(call.id, "این بازی پیدا نشد.", show_alert=True); return
+    game_url = get_game_url()
+    if not game_url.startswith("https://"):
+        bot.answer_callback_query(call.id, "آدرس امن بازی تنظیم نشده است.", show_alert=True); return
     game_link = game_url + ("&" if "?" in game_url else "?") + "mode=" + str(game["id"]) + "&name=" + quote(game["title"])
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🎮 اجرای این بازی", url=game_link))
-    caption = "🎮 <b>MASIH GUARD ARCADE</b>\n✨ " + esc(game["title"]) + "\n🎲 از میان ۵۰ حالت تصادفی انتخاب شد؛ برای شروع روی دکمه بزن."
+    kb = types.InlineKeyboardMarkup(); kb.add(types.InlineKeyboardButton("🚀 اجرای " + game["title"], url=game_link))
+    caption = "🎮 <b>MASIH GUARD ARCADE</b>\n🕹️ " + esc(game["title"]) + "\n🎯 بازی " + str(game["id"]) + " از ۵۰\nبرای شروع، دکمهٔ اجرا را بزن."
     try:
-        animation = _make_arcade_preview(game)
-        bot.send_animation(message.chat.id, animation=animation, caption=caption, reply_markup=kb,
-                           reply_to_message_id=message.message_id, parse_mode="HTML")
+        bot.send_animation(call.message.chat.id, animation=_make_arcade_preview(game), caption=caption, reply_markup=kb, reply_to_message_id=call.message.message_id, parse_mode="HTML")
     except Exception as exc:
-        print("Animated arcade preview fallback:", repr(exc))
-        safe_reply_to(message, caption + "\n🕹️ پیش‌نمایش متحرک در دسترس نبود؛ بازی را از دکمه باز کن.", reply_markup=kb)
+        print("Arcade preview fallback:", repr(exc)); bot.send_message(call.message.chat.id, caption + "\nپیش‌نمایش متحرک در دسترس نبود.", reply_markup=kb, parse_mode="HTML")
+    bot.answer_callback_query(call.id, "بازی انتخاب شد: " + game["title"])
 
 @bot.message_handler(commands=["game", "games"])
 def game_command(message):
@@ -3139,6 +3094,9 @@ def game_command(message):
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
+        if data.startswith("arcade:play:"):
+            send_selected_game(call, int(data.rsplit(":", 1)[1]))
+            return
         if data.startswith("tagmenu:") or data.startswith("tagrun:"):
             if not call.message or call.message.chat.type not in ("group", "supergroup"):
                 bot.answer_callback_query(call.id, "این منو فقط داخل گروه کار می‌کند.", show_alert=True); return
@@ -4526,29 +4484,32 @@ GAME_HTML = r"""<!doctype html>
 <div class="hint" id="hint">حرکت: جوی‌استیک یا WASD · پرش: دکمهٔ پرش · تعامل: نزدیک نشانگر شو</div>
 <div class="controls"><div class="stick" id="stick"><div class="knob" id="knob"></div></div><div class="actions"><button class="act" id="jump">پرش ⤴</button><button class="act secondary" id="interact">تعامل</button></div></div></div>
 <div class="toast" id="toast"></div>
-<div class="center" id="intro"><div class="overlayCard"><div class="logo">🌆</div><h1>عملیات شهر آزاد</h1><p>یک ماجراجویی سه‌بعدی از نمای سوم‌شخص. در شهر حرکت کن، کریستال‌ها را جمع کن، به نشانگر مأموریت برس و برج ارتباطی را فعال کن. بازی برای لمس موبایل و صفحه‌کلید طراحی شده است.</p><div class="rowBtns"><button class="primary" id="start">شروع عملیات</button><button class="secondaryBtn" id="how">راهنمای کنترل</button></div></div></div>
+<div class="center" id="intro"><div class="overlayCard"><div class="logo">🌆</div><h1 id="gameIntroTitle">عملیات شهر آزاد</h1><p>بازی سه‌بعدی انتخابی با کنترل لمسی و صفحه‌کلید؛ هدف و محیط بر اساس دستهٔ بازی تغییر می‌کند.</p><div class="rowBtns"><button class="primary" id="start">شروع عملیات</button><button class="secondaryBtn" id="how">راهنمای کنترل</button></div></div></div>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-const $=id=>document.getElementById(id);let scene,camera,renderer,clock,player,playerRoot,goal,beacon,score=0,gems=0,level=1,started=false,completed=false,velocityY=0,onGround=true,move={x:0,y:0},keys={},crystalItems=[],buildings=[],lastToast=0,missionStep=0,limbs=[];
-const arcadeQuery = new URLSearchParams(location.search);
-const arcadeModeId = Math.max(1, Math.min(50, parseInt(arcadeQuery.get('mode') || '1', 10) || 1));
-const arcadeModeName = arcadeQuery.get('name') || 'عملیات شهر آزاد';
-const arcadeVariant = arcadeModeId - 1;
-const arcadeGemGoal = 3 + (arcadeVariant % 8);
-const arcadeSpeed = 5.4 + (arcadeVariant % 6) * 0.55;
-const arcadeGoalX = ((arcadeVariant * 17) % 61) - 30;
-const arcadeGoalZ = -18 - ((arcadeVariant * 11) % 55);
-const arcadePalette = [0x54f5e4,0xffc857,0xff5d8e,0x9771ff,0x5dafff,0x8cff72,0xff914d,0xffffff,0x45e0b5,0xffe66d];
-const arcadeCrystalColor = arcadePalette[arcadeVariant % arcadePalette.length];
+const $=id=>document.getElementById(id);let scene,camera,renderer,clock,player,playerRoot,goal,beacon,score=0,gems=0,level=1,started=false,completed=false,velocityY=0,onGround=true,jumpCount=0,arcadeElapsed=0,move={x:0,y:0},keys={},crystalItems=[],buildings=[],lastToast=0,missionStep=0,limbs=[];
 const world=$('world');
 try{init();animate()}catch(e){fallback(e)}
-function init(){scene=new THREE.Scene();scene.background=new THREE.Color(arcadePalette[arcadeVariant % arcadePalette.length]);scene.fog=new THREE.Fog(arcadePalette[arcadeVariant % arcadePalette.length],42,155);camera=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.1,260);renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.7));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;world.appendChild(renderer.domElement);clock=new THREE.Clock();
+function init(){scene=new THREE.Scene();const familyBg=[0x182337,0x19372b,0x080d27,0x10232b,0x0a321d][arcadeFamily];scene.background=new THREE.Color(familyBg);scene.fog=new THREE.Fog(familyBg,42,155);camera=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.1,260);renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.7));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;world.appendChild(renderer.domElement);clock=new THREE.Clock();
 scene.add(new THREE.HemisphereLight(0xdaf4ff,0x40503f,2.1));let sun=new THREE.DirectionalLight(0xffedcf,3.1);sun.position.set(-30,48,24);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);sun.shadow.camera.left=-65;sun.shadow.camera.right=65;sun.shadow.camera.top=65;sun.shadow.camera.bottom=-65;scene.add(sun);
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(260,260),new THREE.MeshStandardMaterial({color:0x547b65,roughness:1}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
-// Roads, sidewalks, blocks, windows and park trees build a small walkable city.
-for(let i=-4;i<=4;i++){let road=new THREE.Mesh(new THREE.PlaneGeometry(7,240),new THREE.MeshStandardMaterial({color:0x303c48,roughness:.9}));road.rotation.x=-Math.PI/2;road.position.set(i*22,.015,0);scene.add(road);let road2=new THREE.Mesh(new THREE.PlaneGeometry(240,7),new THREE.MeshStandardMaterial({color:0x303c48,roughness:.9}));road2.rotation.x=-Math.PI/2;road2.position.set(0,.02,i*22);scene.add(road2);for(let j=-10;j<=10;j++){let line=new THREE.Mesh(new THREE.BoxGeometry(.13,.025,2),new THREE.MeshStandardMaterial({color:0xe8dca5}));line.position.set(i*22,.04,j*10);scene.add(line);let line2=new THREE.Mesh(new THREE.BoxGeometry(2,.025,.13),new THREE.MeshStandardMaterial({color:0xe8dca5}));line2.position.set(j*10,.045,i*22);scene.add(line2)}}
+// Racing uses city roads; other game families get their own arenas.
+if(arcadeFamily===0){for(let i=-4;i<=4;i++){let road=new THREE.Mesh(new THREE.PlaneGeometry(7,240),new THREE.MeshStandardMaterial({color:0x303c48,roughness:.9}));road.rotation.x=-Math.PI/2;road.position.set(i*22,.015,0);scene.add(road);let road2=new THREE.Mesh(new THREE.PlaneGeometry(240,7),new THREE.MeshStandardMaterial({color:0x303c48,roughness:.9}));road2.rotation.x=-Math.PI/2;road2.position.set(0,.02,i*22);scene.add(road2);for(let j=-10;j<=10;j++){let line=new THREE.Mesh(new THREE.BoxGeometry(.13,.025,2),new THREE.MeshStandardMaterial({color:0xe8dca5}));line.position.set(i*22,.04,j*10);scene.add(line);let line2=new THREE.Mesh(new THREE.BoxGeometry(2,.025,.13),new THREE.MeshStandardMaterial({color:0xe8dca5}));line2.position.set(j*10,.045,i*22);scene.add(line2)}}
+if(arcadeFamily===0){
 const mats=[0x9caeb8,0xb6a99a,0x6d8c9e,0x777e8b,0xb9c3c7,0x8b9d8e].map(c=>new THREE.MeshStandardMaterial({color:c,roughness:.86}));const winMat=new THREE.MeshStandardMaterial({color:0x8be9f4,emissive:0x23566a,emissiveIntensity:.55,roughness:.35});
 for(let x=-4;x<=4;x++)for(let z=-4;z<=4;z++){if(Math.abs(x)<1&&Math.abs(z)<1)continue;if(Math.random()<.18)continue;let bx=x*22+(Math.random()-.5)*5,bz=z*22+(Math.random()-.5)*5,w=7+Math.random()*5,d=7+Math.random()*5,h=5+Math.random()*22;let g=new THREE.Group();let body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mats[Math.floor(Math.random()*mats.length)]);body.position.y=h/2;body.castShadow=true;body.receiveShadow=true;g.add(body);for(let yy=2;yy<h-1;yy+=2.2){for(let xx=-w/2+1;xx<w/2-.4;xx+=1.55){let win=new THREE.Mesh(new THREE.BoxGeometry(.65,.9,.06),winMat);win.position.set(xx,yy,d/2+.035);g.add(win);let win2=win.clone();win2.position.z=-d/2-.035;g.add(win2)}}g.position.set(bx,0,bz);scene.add(g);buildings.push({x:bx,z:bz,w,d,h})}
+} // end race-city roads
+if(arcadeFamily!==0){
+ const colors=[0x30333e,0x254d35,0x11162d,0x173c29];
+ const floor=new THREE.Mesh(new THREE.PlaneGeometry(180,180),new THREE.MeshStandardMaterial({color:colors[arcadeFamily-1],roughness:.92}));floor.rotation.x=-Math.PI/2;floor.position.y=.04;scene.add(floor);
+ for(let i=0;i<18;i++){const x=((i*37)%120)-60,z=((i*53)%120)-60;
+  if(arcadeFamily===1){const h=1.2+(i%4)*.65;const o=new THREE.Mesh(new THREE.BoxGeometry(5,h,5),new THREE.MeshStandardMaterial({color:[0x52677b,0x314f67,0x7b6651][i%3]}));o.position.set(x,h/2,z);o.castShadow=true;scene.add(o);}
+  else if(arcadeFamily===2){const o=new THREE.Mesh(new THREE.IcosahedronGeometry(1+(i%3)*.45,1),new THREE.MeshStandardMaterial({color:i%2?0x9c3159:0x3449a5,emissive:i%2?0x501020:0x101b66,emissiveIntensity:.7}));o.position.set(x,2+(i%5),z);scene.add(o);}
+  else if(arcadeFamily===3){const c=[0x54f5e4,0xffc857,0xff5d8e,0x9771ff,0x5dafff][i%5];const o=new THREE.Mesh(new THREE.BoxGeometry(5,.45,5),new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.35}));o.position.set(x,.3,z);scene.add(o);}
+  else {const o=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,3,12),new THREE.MeshStandardMaterial({color:0xe9f4ff}));o.position.set(x,1.5,z);scene.add(o);}
+ }
+}
+} // end city building set
 // Green park island and trees.
 let park=new THREE.Mesh(new THREE.CircleGeometry(9,32),new THREE.MeshStandardMaterial({color:0x3d8055,roughness:1}));park.rotation.x=-Math.PI/2;park.position.set(0,.06,-4);scene.add(park);for(let i=0;i<14;i++){let x=(Math.random()-.5)*15,z=-4+(Math.random()-.5)*15;if(Math.abs(x)<2&&Math.abs(z+4)<2)continue;tree(x,z)}
 function tree(x,z){let trunk=new THREE.Mesh(new THREE.CylinderGeometry(.18,.28,1.8,7),new THREE.MeshStandardMaterial({color:0x6e4931}));trunk.position.set(x,.9,z);trunk.castShadow=true;scene.add(trunk);let crown=new THREE.Mesh(new THREE.IcosahedronGeometry(1.25,1),new THREE.MeshStandardMaterial({color:[0x2c7049,0x3d8654,0x347b61][Math.floor(Math.random()*3)],roughness:1}));crown.position.set(x,2.25,z);crown.castShadow=true;scene.add(crown)}
@@ -4556,25 +4517,32 @@ function tree(x,z){let trunk=new THREE.Mesh(new THREE.CylinderGeometry(.18,.28,1
 playerRoot=new THREE.Group();scene.add(playerRoot);let skin=new THREE.MeshStandardMaterial({color:0xd9a37d,roughness:.8}),jacket=new THREE.MeshStandardMaterial({color:0x152b43,roughness:.65}),pants=new THREE.MeshStandardMaterial({color:0x253747,roughness:.8}),accent=new THREE.MeshStandardMaterial({color:0x3ce4d1,metalness:.35,roughness:.35});
 const torso=new THREE.Mesh(new THREE.CapsuleGeometry(.42,.72,4,8),jacket);torso.position.y=1.35;torso.castShadow=true;playerRoot.add(torso);let head=new THREE.Mesh(new THREE.SphereGeometry(.3,16,12),skin);head.position.y=2.12;head.castShadow=true;playerRoot.add(head);let hair=new THREE.Mesh(new THREE.SphereGeometry(.31,16,8,0,Math.PI*2,0,Math.PI*.55),new THREE.MeshStandardMaterial({color:0x222b34,roughness:.9}));hair.position.y=2.23;playerRoot.add(hair);let backpack=new THREE.Mesh(new THREE.BoxGeometry(.48,.62,.22),new THREE.MeshStandardMaterial({color:0x0b121d,roughness:.8}));backpack.position.set(0,1.38,-.39);playerRoot.add(backpack);limbs=[];for(let side of [-1,1]){let arm=new THREE.Mesh(new THREE.CapsuleGeometry(.13,.55,3,6),jacket);arm.position.set(side*.52,1.42,0);arm.rotation.z=side*-.15;arm.castShadow=true;playerRoot.add(arm);let leg=new THREE.Mesh(new THREE.CapsuleGeometry(.16,.52,3,6),pants);leg.position.set(side*.2,.53,0);leg.castShadow=true;playerRoot.add(leg);limbs.push({arm,leg,side})}let badge=new THREE.Mesh(new THREE.BoxGeometry(.19,.23,.045),accent);badge.position.set(0,1.53,.421);playerRoot.add(badge);playerRoot.position.set(0,0,9);
 // Mission beacon and collectible crystals.
-goal=new THREE.Vector3(arcadeGoalX,0,arcadeGoalZ);const base=new THREE.Mesh(new THREE.CylinderGeometry(1.4,1.8,.6,12),new THREE.MeshStandardMaterial({color:0x1e3543,metalness:.6,roughness:.4}));base.position.set(goal.x,.3,goal.z);base.castShadow=true;scene.add(base);beacon=new THREE.Group();beacon.position.set(goal.x,0,goal.z);scene.add(beacon);let ring=new THREE.Mesh(new THREE.TorusGeometry(1.8,.12,8,36),new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x9d5800,emissiveIntensity:1.3,metalness:.4}));ring.rotation.x=Math.PI/2;ring.position.y=.9;beacon.add(ring);let beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.6,7,12,1,true),new THREE.MeshBasicMaterial({color:0xffc857,transparent:true,opacity:.2,side:THREE.DoubleSide}));beam.position.y=4;beacon.add(beam);let orb=new THREE.Mesh(new THREE.OctahedronGeometry(.75,1),new THREE.MeshStandardMaterial({color:0xffdd76,emissive:0xffa600,emissiveIntensity:1.5,metalness:.3,roughness:.2}));orb.position.y=2.2;beacon.add(orb);
-for(let i=0;i<Math.max(arcadeGemGoal+3,8);i++){let x=(Math.random()-.5)*75,z=(Math.random()-.5)*85;if(Math.hypot(x,z-goal.z)<6)z+=10;let crystal=new THREE.Mesh(new THREE.OctahedronGeometry(.55,0),new THREE.MeshStandardMaterial({color:arcadeCrystalColor,emissive:arcadeCrystalColor,emissiveIntensity:1.1,metalness:.55,roughness:.2}));crystal.position.set(x,.9,z);crystal.castShadow=true;scene.add(crystal);crystalItems.push({mesh:crystal,got:false,phase:Math.random()*5})}
+goal=new THREE.Vector3(0,0,-24);const base=new THREE.Mesh(new THREE.CylinderGeometry(1.4,1.8,.6,12),new THREE.MeshStandardMaterial({color:0x1e3543,metalness:.6,roughness:.4}));base.position.set(goal.x,.3,goal.z);base.castShadow=true;scene.add(base);beacon=new THREE.Group();beacon.position.set(goal.x,0,goal.z);scene.add(beacon);let ring=new THREE.Mesh(new THREE.TorusGeometry(1.8,.12,8,36),new THREE.MeshStandardMaterial({color:0xffc857,emissive:0x9d5800,emissiveIntensity:1.3,metalness:.4}));ring.rotation.x=Math.PI/2;ring.position.y=.9;beacon.add(ring);let beam=new THREE.Mesh(new THREE.CylinderGeometry(.12,.6,7,12,1,true),new THREE.MeshBasicMaterial({color:0xffc857,transparent:true,opacity:.2,side:THREE.DoubleSide}));beam.position.y=4;beacon.add(beam);let orb=new THREE.Mesh(new THREE.OctahedronGeometry(.75,1),new THREE.MeshStandardMaterial({color:0xffdd76,emissive:0xffa600,emissiveIntensity:1.5,metalness:.3,roughness:.2}));orb.position.y=2.2;beacon.add(orb);
+for(let i=0;i<5+(arcadeModeId%6);i++){let x=(Math.random()-.5)*55,z=(Math.random()-.5)*65;if(Math.hypot(x,z-goal.z)<6)z+=10;let crystal=new THREE.Mesh(new THREE.OctahedronGeometry(.55,0),new THREE.MeshStandardMaterial({color:0x54f5e4,emissive:0x087c8b,emissiveIntensity:1.1,metalness:.55,roughness:.2}));crystal.position.set(x,.9,z);crystal.castShadow=true;scene.add(crystal);crystalItems.push({mesh:crystal,got:false,phase:Math.random()*5})}
 player=playerRoot;camera.position.set(0,5,17);camera.lookAt(player.position);window.addEventListener('resize',resize);window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(e.key.toLowerCase()))e.preventDefault();if(e.key===' '&&started)jump()},{passive:false});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);$('start').onclick=()=>{started=true;$('intro').style.display='none';toast('عملیات شروع شد! به نشانگر طلایی برو.');};$('how').onclick=()=>toast('با جوی‌استیک حرکت کن؛ WASD یا کلیدهای جهت‌نما هم کار می‌کنند. دکمهٔ پرش برای موانع است و نزدیک نشانگر «تعامل» را بزن.');$('jump').addEventListener('pointerdown',e=>{e.preventDefault();jump()});$('interact').addEventListener('pointerdown',e=>{e.preventDefault();interact()});setupStick();}
 function setupStick(){let stick=$('stick'),knob=$('knob'),active=false,cx=0,cy=0;function set(e){let dx=e.clientX-cx,dy=e.clientY-cy,len=Math.hypot(dx,dy),max=37;if(len>max){dx=dx/len*max;dy=dy/len*max}move.x=dx/max;move.y=dy/max;knob.style.transform=`translate(${dx}px,${dy}px)`}stick.addEventListener('pointerdown',e=>{active=true;stick.setPointerCapture(e.pointerId);let r=stick.getBoundingClientRect();cx=r.left+r.width/2;cy=r.top+r.height/2;set(e)});stick.addEventListener('pointermove',e=>{if(active)set(e)});function end(){active=false;move.x=0;move.y=0;knob.style.transform='translate(0,0)'}stick.addEventListener('pointerup',end);stick.addEventListener('pointercancel',end)}
-function jump(){if(onGround&&started){velocityY=8.3;onGround=false}}
-function interact(){if(!started)return;let dist=Math.hypot(player.position.x-goal.x,player.position.z-goal.z);if(dist<4.2){if(missionStep===0){missionStep=1;level=2;score+=100;$('score').textContent=score;$('level').textContent='۲';$('missionTitle').textContent='ماموریت ۲: '+arcadeModeName;$('missionText').textContent='برای تکمیل این مرحله '+arcadeGemGoal+' کریستال رنگی جمع کن.';toast('نشانگر فعال شد! +۱۰۰ امتیاز');updateProgress()}else if(gems>=arcadeGemGoal&&!completed){completed=true;score+=250;$('score').textContent=score;level=3;$('level').textContent='۳';$('missionTitle').textContent='ماموریت تکمیل شد!';$('missionText').textContent='چالش «'+arcadeModeName+'» را تمام کردی! می‌توانی آزادانه گشت‌وگذار کنی.';$('progress').style.width='100%';toast('ماموریت کامل شد! +۲۵۰ امتیاز 🎉')}else toast('برای پایان مأموریت، '+arcadeGemGoal+' کریستال جمع کن.')}else toast('به نشانگر مأموریت نزدیک‌تر شو تا تعامل کنی.');}
-function updateProgress(){let p=missionStep===0?Math.min(100,Math.max(0,100-Math.hypot(player.position.x-goal.x,player.position.z-goal.z)*2.1)):Math.min(100,gems/arcadeGemGoal*100);$('progress').style.width=p+'%'}
+function jump(){if(onGround&&started){velocityY=8.3;onGround=false;jumpCount++}}
+function interact(){if(!started)return;let dist=Math.hypot(player.position.x-goal.x,player.position.z-goal.z);if(dist<4.2 && arcadeFamily===0 && !completed){completed=true;score+=300;$('score').textContent=score;$('missionTitle').textContent='خط پایان!';$('missionText').textContent='مسابقه «'+arcadeModeName+'» تمام شد.';$('progress').style.width='100%';toast('مسابقه تمام شد! +۳۰۰ امتیاز');return;}if(dist<4.2 && arcadeFamily===1 && jumpCount<3){toast('برای عبور از مسیر، سه پرش انجام بده!');return;}if(dist<4.2 && (arcadeFamily===3 || arcadeFamily===4) && gems<arcadeRequiredGems){toast('برای تکمیل چالش، '+arcadeRequiredGems+' نشان جمع کن.');return;}if(dist<4.2){if(missionStep===0){missionStep=1;level=2;score+=100;$('score').textContent=score;$('level').textContent='۲';$('missionTitle').textContent='ماموریت ۲: جمع‌آوری کریستال‌ها';$('missionText').textContent='برای تکمیل «'+arcadeModeName+'»، '+arcadeRequiredGems+' نشان جمع کن.';toast('برج فعال شد! +۱۰۰ امتیاز');updateProgress()}else if(gems>=arcadeRequiredGems&&!completed){completed=true;score+=250;$('score').textContent=score;level=3;$('level').textContent='۳';$('missionTitle').textContent='ماموریت تکمیل شد!';$('missionText').textContent='شهر نجات پیدا کرد. می‌توانی آزادانه به گشت‌وگذار ادامه بدهی.';$('progress').style.width='100%';toast('ماموریت کامل شد! +۲۵۰ امتیاز 🎉')}else toast('برای پایان مأموریت، ۶ کریستال جمع کن.')}else toast('به نشانگر طلایی نزدیک‌تر شو تا تعامل کنی.');}
+function updateProgress(){let p=missionStep===0?Math.min(100,Math.max(0,100-Math.hypot(player.position.x-goal.x,player.position.z-goal.z)*3)):Math.min(100,gems/arcadeRequiredGems*100);$('progress').style.width=p+'%'}
 function toast(s){$('toast').textContent=s;$('toast').classList.add('show');let t=Date.now();lastToast=t;setTimeout(()=>{if(lastToast===t)$('toast').classList.remove('show')},2100)}
-function animate(){requestAnimationFrame(animate);if(!renderer||!scene)return;let dt=Math.min(clock.getDelta(),.04),t=clock.elapsedTime;if(beacon){beacon.rotation.y=t*.55;beacon.position.y=Math.sin(t*1.8)*.13}crystalItems.forEach(c=>{if(!c.got){c.mesh.rotation.y+=dt*1.4;c.mesh.position.y=.9+Math.sin(t*2+c.phase)*.2;if(started&&player.position.distanceTo(c.mesh.position)<1.45){c.got=true;c.mesh.visible=false;gems++;score+=25;$('gems').textContent=gems;$('score').textContent=score;toast('کریستال جمع شد! +۲۵');updateProgress()}}});if(started){let ix=move.x,iz=move.y*-1;if(keys.a||keys.arrowleft)ix-=1;if(keys.d||keys.arrowright)ix+=1;if(keys.w||keys.arrowup)iz+=1;if(keys.s||keys.arrowdown)iz-=1;let len=Math.hypot(ix,iz);if(len>1){ix/=len;iz/=len}let moving=Math.abs(ix)+Math.abs(iz)>.05;if(moving){let speed=arcadeSpeed;player.position.x+=ix*speed*dt;player.position.z-=iz*speed*dt;player.rotation.y=Math.atan2(ix,iz);limbAnimate(t,dt)}else limbsIdle();player.position.x=THREE.MathUtils.clamp(player.position.x,-112,112);player.position.z=THREE.MathUtils.clamp(player.position.z,-112,112);velocityY-=19*dt;player.position.y+=velocityY*dt;if(player.position.y<=0){player.position.y=0;velocityY=0;onGround=true} // Simple collision against city blocks.
+function animate(){requestAnimationFrame(animate);if(!renderer||!scene)return;let dt=Math.min(clock.getDelta(),.04),t=clock.elapsedTime;if(beacon){beacon.rotation.y=t*.55;beacon.position.y=Math.sin(t*1.8)*.13}crystalItems.forEach(c=>{if(!c.got){c.mesh.rotation.y+=dt*1.4;c.mesh.position.y=.9+Math.sin(t*2+c.phase)*.2;if(started&&player.position.distanceTo(c.mesh.position)<1.45){c.got=true;c.mesh.visible=false;gems++;score+=25;$('gems').textContent=gems;$('score').textContent=score;toast('کریستال جمع شد! +۲۵');updateProgress()}}});if(started){let ix=move.x,iz=move.y*-1;if(keys.a||keys.arrowleft)ix-=1;if(keys.d||keys.arrowright)ix+=1;if(keys.w||keys.arrowup)iz+=1;if(keys.s||keys.arrowdown)iz-=1;let len=Math.hypot(ix,iz);if(len>1){ix/=len;iz/=len}let moving=Math.abs(ix)+Math.abs(iz)>.05;if(moving){let speed=7.1*[1.28,.92,1.12,.76,1.08][arcadeFamily];player.position.x+=ix*speed*dt;player.position.z-=iz*speed*dt;player.rotation.y=Math.atan2(ix,iz);limbAnimate(t,dt)}else limbsIdle();player.position.x=THREE.MathUtils.clamp(player.position.x,-112,112);player.position.z=THREE.MathUtils.clamp(player.position.z,-112,112);velocityY-=19*dt;player.position.y+=velocityY*dt;if(player.position.y<=0){player.position.y=0;velocityY=0;onGround=true} // Simple collision against city blocks.
 for(const b of buildings){let px=player.position.x,pz=player.position.z;if(Math.abs(px-b.x)<b.w/2+.55&&Math.abs(pz-b.z)<b.d/2+.55){let dx=px-b.x,dz=pz-b.z;if(Math.abs(dx)/ (b.w/2+.55)>Math.abs(dz)/(b.d/2+.55))player.position.x=b.x+Math.sign(dx||1)*(b.w/2+.58);else player.position.z=b.z+Math.sign(dz||1)*(b.d/2+.58)}}updateProgress();}
 let target=new THREE.Vector3(player.position.x,player.position.y+1.1,player.position.z);let desired=new THREE.Vector3(player.position.x,player.position.y+5.1,player.position.z+9.6);camera.position.lerp(desired,1-Math.pow(.001,dt));camera.lookAt(target);renderer.render(scene,camera)}
 let limbPhase=0;function limbAnimate(t,dt){limbPhase+=dt*9;for(const l of limbs){l.leg.rotation.x=Math.sin(limbPhase)*.62*l.side;l.arm.rotation.x=-Math.sin(limbPhase)*.4*l.side}}function limbsIdle(){if(!playerRoot)return;for(const l of limbs){l.leg.rotation.x*=.8;l.arm.rotation.x*=.8}}
 function resize(){if(!renderer||!camera)return;camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)}
 function fallback(e){console.error(e);world.innerHTML='<div style="padding:24px;color:white;font:16px Tahoma;line-height:2">مرورگر نتوانست موتور سه‌بعدی را بارگذاری کند. اینترنت را بررسی کن و صفحه را دوباره باز کن. بازی برای نمایش سه‌بعدی به بارگذاری کتابخانهٔ Three.js نیاز دارد.</div>'}
+const arcadeQuery = new URLSearchParams(location.search);
+const arcadeModeId = Math.max(1, Math.min(50, parseInt(arcadeQuery.get('mode') || '1', 10) || 1));
+const arcadeModeName = arcadeQuery.get('name') || 'مسابقه ماشین نئونی';
+const arcadeFamily = Math.floor((arcadeModeId - 1) / 10);
+const arcadeFamilyNames = ['مسابقه و سرعت','پارکور و ماجراجویی','اکشن و بقا','فکری و معما','ورزشی و رکورد'];
+const arcadeRequiredGems = [3,5,6,4,5][arcadeFamily] + (arcadeModeId % 3);
 if (arcadeModeName) {
   const titleNode = document.getElementById('missionTitle');
   const textNode = document.getElementById('missionText');
-  if (titleNode) titleNode.textContent = 'چالش: ' + arcadeModeName;
-  if (textNode) textNode.textContent = 'حالت '+arcadeModeId+' از ۵۰: به نشانگر در موقعیت متفاوت برس و '+arcadeGemGoal+' کریستال با رنگ ویژه جمع کن. سرعت حرکت و چیدمان مأموریت با حالت انتخابی تغییر می‌کند.';
+  if (titleNode) titleNode.textContent = 'بازی ' + arcadeModeId + ': ' + arcadeModeName;
+  const introTitle = document.getElementById('gameIntroTitle'); if (introTitle) introTitle.textContent = arcadeModeName;
+  if (textNode) textNode.textContent = (arcadeFamily===0?'مسابقه: به خط پایان برس.':arcadeFamily===1?'پارکور: حداقل سه پرش انجام بده و به مقصد برس.':arcadeFamily===2?'اکشن: کریستال‌ها را جمع کن و به پایگاه برگرد.':arcadeFamily===3?'معما: تعداد لازم کریستال را پیدا کن و مقصد را فعال کن.':'ورزش: هدف‌ها را جمع کن و امتیازت را بالا ببر.') + ' | بازی ' + arcadeModeId + '/50: ' + arcadeModeName;
 }
 
 </script></body></html>"""
