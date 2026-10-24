@@ -3,7 +3,7 @@
 """مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈 — single-file Telegram group management bot."""
 import os, re, json, time, random, threading, io, urllib.request, urllib.error, html, socket, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 from datetime import datetime, date
 try:
     from zoneinfo import ZoneInfo
@@ -2185,13 +2185,7 @@ def group_message_handler(message):
             safe_reply_to(message, f"📊 <b>آمار گروه</b>\n💬 پیام‌ها: {DATA['stats'].get('messages', 0)}\n🚫 موارد مسدودشده: {DATA['stats'].get('blocked', 0)}\n⚠️ اخطارها: {DATA['stats'].get('warns', 0)}")
             return
         if compact_public in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
-            game_url = get_game_url()
-            if game_url.startswith("https://"):
-                game_kb = types.InlineKeyboardMarkup()
-                game_kb.add(types.InlineKeyboardButton("🎮 باز کردن صفحه بازی", url=game_url))
-                safe_reply_to(message, "🎮 <b>بازی MASIH GUARD</b>\nبرای باز کردن صفحهٔ بازی روی دکمه بزن.", reply_markup=game_kb)
-            else:
-                safe_reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز از طرف هاست مشخص نشده است. متغیر WEB_GAME_URL یا PUBLIC_BASE_URL باید تنظیم باشد.")
+            send_random_game(message)
             return
         if not is_group_licensed(message.chat.id):
             # Keep the bot inert in unlicensed groups and notify once per group.
@@ -3020,15 +3014,86 @@ def cancel_command(message):
     else:
         safe_reply_to(message, "ℹ️ عملیات فعالی برای لغو وجود نداشت.")
 
+# ---------------- Random 100-mode arcade previews ----------------
+_ARCADE_THEMES = [
+    "شهر نئونی", "تعقیب شبانه", "عملیات برج", "مسابقه خیابانی", "شکار کریستال",
+    "نجات شهر", "فرار از ربات‌ها", "ماجراجویی کوهستان", "جزیره اسرارآمیز", "عملیات فضایی"
+]
+_ARCADE_CHALLENGES = [
+    "ماموریت سرعت", "گنج پنهان", "چالش طلایی", "نجات گروگان‌ها", "مسیر مخفی",
+    "فرار بزرگ", "شکارچی حرفه‌ای", "طوفان نهایی", "دروازه اسرار", "مرحله افسانه‌ای"
+]
+ARCADE_GAMES = [
+    {"id": i * len(_ARCADE_CHALLENGES) + j + 1, "title": f"{theme} — {challenge}"}
+    for i, theme in enumerate(_ARCADE_THEMES)
+    for j, challenge in enumerate(_ARCADE_CHALLENGES)
+]
+
+def _make_arcade_preview(game):
+    """Build an original animated GIF locally; no third-party image URL is needed."""
+    from PIL import Image, ImageDraw
+    import math
+    frames = []
+    palette = [(39, 226, 211), (255, 190, 78), (151, 113, 255), (255, 93, 142), (93, 175, 255)]
+    accent = palette[(int(game["id"]) - 1) % len(palette)]
+    for frame_no in range(8):
+        im = Image.new("RGB", (480, 270), (6, 13, 29))
+        d = ImageDraw.Draw(im)
+        for y in range(270):
+            c = int(15 + y * 0.12)
+            d.line((0, y, 480, y), fill=(5, min(35, c), min(60, c + 12)))
+        # Neon skyline and animated lights
+        for k in range(9):
+            x = k * 57 - 10
+            h = 45 + ((k * 29 + int(game["id"]) * 7) % 95)
+            d.rectangle((x, 190-h, x+39, 208), fill=(12, 25, 45), outline=(25, 74, 94), width=2)
+            for wy in range(198-h, 198, 16):
+                for wx in range(x+8, x+34, 12):
+                    if (wx + wy + frame_no * 4) % 3:
+                        d.rectangle((wx, wy, wx+3, wy+5), fill=accent)
+        d.polygon([(0, 212), (480, 212), (480, 270), (0, 270)], fill=(11, 19, 31))
+        d.line((0, 242, 480, 242), fill=accent, width=2)
+        # Animated hero and collectible
+        hx = 115 + frame_no * 12
+        d.ellipse((hx-13, 158, hx+13, 184), fill=(255, 220, 177), outline=(255, 255, 255))
+        d.rounded_rectangle((hx-16, 181, hx+16, 225), radius=7, fill=accent)
+        d.line((hx-8, 222, hx-15-frame_no%3, 244), fill=(222, 238, 255), width=7)
+        d.line((hx+8, 222, hx+16+frame_no%3, 244), fill=(222, 238, 255), width=7)
+        gx = 350 + int(9 * math.sin(frame_no * 0.8))
+        gy = 180 + int(8 * math.cos(frame_no * 0.8))
+        d.polygon([(gx, gy-17), (gx+13, gy), (gx, gy+17), (gx-13, gy)], fill=(255, 221, 93), outline=(255, 255, 255))
+        for q in range(5):
+            sx = (gx + q*23 + frame_no*11) % 470
+            sy = 130 + (q*19 % 60)
+            d.ellipse((sx, sy, sx+3, sy+3), fill=(220, 250, 255))
+        frames.append(im)
+    out = io.BytesIO()
+    frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:], duration=105, loop=0, optimize=True)
+    out.seek(0)
+    out.name = "masih-guard-arcade.gif"
+    return out
+
+def send_random_game(message):
+    game_url = get_game_url()
+    if not game_url.startswith("https://"):
+        safe_reply_to(message, "⚠️ آدرس امن بازی تنظیم نشده است. متغیر WEB_GAME_URL را روی https://masih-guard.fadehost.app/game قرار بده.")
+        return
+    game = random.choice(ARCADE_GAMES)
+    game_link = game_url + ("&" if "?" in game_url else "?") + "mode=" + str(game["id"]) + "&name=" + quote(game["title"])
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🎮 اجرای این بازی", url=game_link))
+    caption = "🎮 <b>MASIH GUARD ARCADE</b>\n✨ " + esc(game["title"]) + "\n🎲 از میان ۱۰۰ حالت تصادفی انتخاب شد؛ برای شروع روی دکمه بزن."
+    try:
+        animation = _make_arcade_preview(game)
+        bot.send_animation(message.chat.id, animation=animation, caption=caption, reply_markup=kb,
+                           reply_to_message_id=message.message_id, parse_mode="HTML")
+    except Exception as exc:
+        print("Animated arcade preview fallback:", repr(exc))
+        safe_reply_to(message, caption + "\n🕹️ پیش‌نمایش متحرک در دسترس نبود؛ بازی را از دکمه باز کن.", reply_markup=kb)
+
 @bot.message_handler(commands=["game", "games"])
 def game_command(message):
-    game_url = get_game_url()
-    if game_url.startswith("https://"):
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🎮 باز کردن فهرست ۵۰ بازی", url=game_url))
-        safe_reply_to(message, "🎮 <b>MASIH GUARD ARCADE</b>\nفهرست بازی‌ها و کارت‌های تصویری در مرورگر باز می‌شود.\nبرای بازی متنی داخل تلگرام، کلمهٔ «بازی» را بدون اسلش بفرست.", reply_markup=kb)
-    else:
-        safe_reply_to(message, "⚠️ آدرس صفحهٔ بازی هنوز تنظیم نشده است. در هاست، WEB_GAME_URL را روی آدرس HTTPS سرویس وب ربات به‌همراه /game قرار بده؛ نمونه: https://your-service.onrender.com/game")
+    send_random_game(message)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -3528,25 +3593,7 @@ def private_text_handler(message):
         bot.send_message(uid, "🔤 متن یا اسم دلخواهت رو بفرست تا ۲۰۰ مدل فونت فانتزی و جیگول میگول بسازم.")
         return
     if compact in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
-        key=f"private:{uid}"; idx=GAME_CYCLES.get(key,0)%10
-        prompts=[
-            ("🏀 بازی ۱/۱۰ — بسکتبال", "برای پرتاب توپ، عددی از ۱ تا ۵ حدس بزن.", "number", 5),
-            ("⚽ بازی ۲/۱۰ — پنالتی فوتبال", "جهت دروازه‌بان را حدس بزن: ۱، ۲ یا ۳.", "number", 3),
-            ("🧩 بازی ۳/۱۰ — معما", "چی همیشه دنبالت می‌آید ولی در تاریکی ناپدید می‌شود؟ جواب را بنویس.", "riddle", "سایه"),
-            ("🎯 بازی ۴/۱۰ — هدف‌گیری", "عدد هدف از ۱ تا ۵ را حدس بزن.", "number", 5),
-            ("✊ بازی ۵/۱۰ — سنگ‌کاغذ‌قیچی", "یکی را بنویس: سنگ، کاغذ یا قیچی.", "rps", None),
-            ("🧠 بازی ۶/۱۰ — حدس عدد", "عدد مخفی بین ۱ تا ۱۰ را حدس بزن.", "number", 10),
-            ("🎲 بازی ۷/۱۰ — تاس", "حدس بزن تاس چه عددی می‌آورد (۱ تا ۶).", "number", 6),
-            ("🧮 بازی ۸/۱۰ — حساب سریع", "حاصل ۷ + ۸ چند می‌شود؟", "math", 15),
-            ("🔤 بازی ۹/۱۰ — کلمه‌سازی", "یک کلمهٔ فارسی که با «م» شروع می‌شود بفرست.", "word", "م"),
-            ("🏁 بازی ۱۰/۱۰ — چالش عددی", "یک عدد از ۱ تا ۱۰ حدس بزن.", "number", 10),
-        ]
-        title,prompt,kind,arg=prompts[idx]
-        answer = random.randint(1,arg) if kind=="number" else (random.choice(["سنگ","کاغذ","قیچی"]) if kind=="rps" else arg)
-        GAMES[uid]={"kind":kind,"answer":answer,"title":title}
-        WAITING[uid]={"action":"game:round","chat_id":uid}
-        GAME_CYCLES[key]=idx+1
-        bot.send_message(uid, f"{title}\n{prompt}\n\nپاسخت را بفرست."); return
+        send_random_game(message); return
     if normalized_private in {"هوش", "هوش مصنوعی", "دستیار", "دستیار هوشمند"}:
         bot.send_message(uid, "🧠 دستیار آماده است. درخواستت رو بعد از «هوش» بنویس؛ مثلاً «هوش این متن رو خلاصه کن» یا «هوش راهنمای قفل لینک رو بگو».")
         return
@@ -4473,6 +4520,15 @@ let target=new THREE.Vector3(player.position.x,player.position.y+1.1,player.posi
 let limbPhase=0;function limbAnimate(t,dt){limbPhase+=dt*9;for(const l of limbs){l.leg.rotation.x=Math.sin(limbPhase)*.62*l.side;l.arm.rotation.x=-Math.sin(limbPhase)*.4*l.side}}function limbsIdle(){if(!playerRoot)return;for(const l of limbs){l.leg.rotation.x*=.8;l.arm.rotation.x*=.8}}
 function resize(){if(!renderer||!camera)return;camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)}
 function fallback(e){console.error(e);world.innerHTML='<div style="padding:24px;color:white;font:16px Tahoma;line-height:2">مرورگر نتوانست موتور سه‌بعدی را بارگذاری کند. اینترنت را بررسی کن و صفحه را دوباره باز کن. بازی برای نمایش سه‌بعدی به بارگذاری کتابخانهٔ Three.js نیاز دارد.</div>'}
+const arcadeQuery = new URLSearchParams(location.search);
+const arcadeModeName = arcadeQuery.get('name');
+if (arcadeModeName) {
+  const titleNode = document.getElementById('missionTitle');
+  const textNode = document.getElementById('missionText');
+  if (titleNode) titleNode.textContent = 'چالش: ' + arcadeModeName;
+  if (textNode) textNode.textContent = 'در شهر آزاد حرکت کن، به نشانگر طلایی برس و کریستال‌ها را جمع کن. این یکی از ۱۰۰ حالت تصادفی آرکید است.';
+}
+
 </script></body></html>"""
 class _GameRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
