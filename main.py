@@ -3014,20 +3014,60 @@ def cancel_command(message):
     else:
         safe_reply_to(message, "ℹ️ عملیات فعالی برای لغو وجود نداشت.")
 
-# ---------------- Random 100-mode arcade previews ----------------
-_ARCADE_THEMES = [
-    "شهر نئونی", "تعقیب شبانه", "عملیات برج", "مسابقه خیابانی", "شکار کریستال",
-    "نجات شهر", "فرار از ربات‌ها", "ماجراجویی کوهستان", "جزیره اسرارآمیز", "عملیات فضایی"
+# ---------------- Random 50-mode arcade previews ----------------
+_ARCADE_TITLES = [
+    'شهر نئونی',
+    'پرش از پشت\u200cبام',
+    'مسیر مخفی',
+    'صعود از برج',
+    'مسابقه موانع',
+    'ثبت رکورد سرعت',
+    'مسیر پرپیچ\u200cوخم',
+    'مسابقه شبانه',
+    'فرار از تعقیب\u200cکننده',
+    'حرکت بی\u200cنقص',
+    'شکار کریستال',
+    'گنج پنهان',
+    'جمع\u200cآوری طلایی\u200cها',
+    'گنج مخفی',
+    'شکارچی حرفه\u200cای',
+    'فرار از ربات\u200cها',
+    'بقای زمان\u200cدار',
+    'خروج از منطقه',
+    'درِ خروج مخفی',
+    'آخرین فرصت',
+    'نجات شهر',
+    'فعال\u200cسازی برج',
+    'بازیابی انرژی',
+    'نجات محموله',
+    'عملیات اضطراری',
+    'صعود از کوهستان',
+    'عبور از پل',
+    'غار اسرارآمیز',
+    'مسیر یخی',
+    'قله نهایی',
+    'جنگل گمشده',
+    'معبد باستانی',
+    'نقشه گنج',
+    'مسیر ساحلی',
+    'فرار از جزیره',
+    'ایستگاه فضایی',
+    'بازیابی هسته',
+    'میدان گرانش',
+    'اکتشاف سیاره',
+    'ماموریت مداری',
+    'مسیر بی\u200cنقص',
+    'رکورد امتیاز',
+    'سرعت بالا',
+    'شکار زمان',
+    'چالش سخت',
+    'طوفان نهایی',
+    'دروازه اسرار',
+    'آزمون قهرمان',
+    'آخرین عملیات',
+    'مرحله افسانه\u200cای'
 ]
-_ARCADE_CHALLENGES = [
-    "ماموریت سرعت", "گنج پنهان", "چالش طلایی", "نجات گروگان‌ها", "مسیر مخفی",
-    "فرار بزرگ", "شکارچی حرفه‌ای", "طوفان نهایی", "دروازه اسرار", "مرحله افسانه‌ای"
-]
-ARCADE_GAMES = [
-    {"id": i * len(_ARCADE_CHALLENGES) + j + 1, "title": f"{theme} — {challenge}"}
-    for i, theme in enumerate(_ARCADE_THEMES)
-    for j, challenge in enumerate(_ARCADE_CHALLENGES)
-]
+ARCADE_GAMES = [{"id": i + 1, "title": title} for i, title in enumerate(_ARCADE_TITLES)]
 
 def _make_arcade_preview(game):
     """Build an original animated GIF locally; no third-party image URL is needed."""
@@ -3082,7 +3122,7 @@ def send_random_game(message):
     game_link = game_url + ("&" if "?" in game_url else "?") + "mode=" + str(game["id"]) + "&name=" + quote(game["title"])
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🎮 اجرای این بازی", url=game_link))
-    caption = "🎮 <b>MASIH GUARD ARCADE</b>\n✨ " + esc(game["title"]) + "\n🎲 از میان ۱۰۰ حالت تصادفی انتخاب شد؛ برای شروع روی دکمه بزن."
+    caption = "🎮 <b>MASIH GUARD ARCADE</b>\n✨ " + esc(game["title"]) + "\n🎲 از میان ۵۰ حالت تصادفی انتخاب شد؛ برای شروع روی دکمه بزن."
     try:
         animation = _make_arcade_preview(game)
         bot.send_animation(message.chat.id, animation=animation, caption=caption, reply_markup=kb,
@@ -4526,7 +4566,7 @@ if (arcadeModeName) {
   const titleNode = document.getElementById('missionTitle');
   const textNode = document.getElementById('missionText');
   if (titleNode) titleNode.textContent = 'چالش: ' + arcadeModeName;
-  if (textNode) textNode.textContent = 'در شهر آزاد حرکت کن، به نشانگر طلایی برس و کریستال‌ها را جمع کن. این یکی از ۱۰۰ حالت تصادفی آرکید است.';
+  if (textNode) textNode.textContent = 'در شهر آزاد حرکت کن، به نشانگر طلایی برس و کریستال‌ها را جمع کن. این یکی از ۵۰ حالت آرکید است.';
 }
 
 </script></body></html>"""
