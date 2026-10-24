@@ -4489,6 +4489,12 @@ GAME_HTML = r"""<!doctype html>
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 const $=id=>document.getElementById(id);let scene,camera,renderer,clock,player,playerRoot,goal,beacon,score=0,gems=0,level=1,started=false,completed=false,velocityY=0,onGround=true,jumpCount=0,arcadeElapsed=0,move={x:0,y:0},keys={},crystalItems=[],buildings=[],lastToast=0,missionStep=0,limbs=[];
 const world=$('world');
+const arcadeQuery = new URLSearchParams(location.search);
+const arcadeModeId = Math.max(1, Math.min(50, parseInt(arcadeQuery.get('mode') || '1', 10) || 1));
+const arcadeModeName = arcadeQuery.get('name') || 'مسابقه ماشین نئونی';
+const arcadeFamily = Math.floor((arcadeModeId - 1) / 10);
+const arcadeFamilyNames = ['مسابقه و سرعت','پارکور و ماجراجویی','اکشن و بقا','فکری و معما','ورزشی و رکورد'];
+const arcadeRequiredGems = [3,5,6,4,5][arcadeFamily] + (arcadeModeId % 3);
 try{init();animate()}catch(e){fallback(e)}
 function init(){scene=new THREE.Scene();const familyBg=[0x182337,0x19372b,0x080d27,0x10232b,0x0a321d][arcadeFamily];scene.background=new THREE.Color(familyBg);scene.fog=new THREE.Fog(familyBg,42,155);camera=new THREE.PerspectiveCamera(62,innerWidth/innerHeight,.1,260);renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.7));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;world.appendChild(renderer.domElement);clock=new THREE.Clock();
 scene.add(new THREE.HemisphereLight(0xdaf4ff,0x40503f,2.1));let sun=new THREE.DirectionalLight(0xffedcf,3.1);sun.position.set(-30,48,24);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);sun.shadow.camera.left=-65;sun.shadow.camera.right=65;sun.shadow.camera.top=65;sun.shadow.camera.bottom=-65;scene.add(sun);
@@ -4531,12 +4537,6 @@ let target=new THREE.Vector3(player.position.x,player.position.y+1.1,player.posi
 let limbPhase=0;function limbAnimate(t,dt){limbPhase+=dt*9;for(const l of limbs){l.leg.rotation.x=Math.sin(limbPhase)*.62*l.side;l.arm.rotation.x=-Math.sin(limbPhase)*.4*l.side}}function limbsIdle(){if(!playerRoot)return;for(const l of limbs){l.leg.rotation.x*=.8;l.arm.rotation.x*=.8}}
 function resize(){if(!renderer||!camera)return;camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)}
 function fallback(e){console.error(e);world.innerHTML='<div style="padding:24px;color:white;font:16px Tahoma;line-height:2">مرورگر نتوانست موتور سه‌بعدی را بارگذاری کند. اینترنت را بررسی کن و صفحه را دوباره باز کن. بازی برای نمایش سه‌بعدی به بارگذاری کتابخانهٔ Three.js نیاز دارد.</div>'}
-const arcadeQuery = new URLSearchParams(location.search);
-const arcadeModeId = Math.max(1, Math.min(50, parseInt(arcadeQuery.get('mode') || '1', 10) || 1));
-const arcadeModeName = arcadeQuery.get('name') || 'مسابقه ماشین نئونی';
-const arcadeFamily = Math.floor((arcadeModeId - 1) / 10);
-const arcadeFamilyNames = ['مسابقه و سرعت','پارکور و ماجراجویی','اکشن و بقا','فکری و معما','ورزشی و رکورد'];
-const arcadeRequiredGems = [3,5,6,4,5][arcadeFamily] + (arcadeModeId % 3);
 if (arcadeModeName) {
   const titleNode = document.getElementById('missionTitle');
   const textNode = document.getElementById('missionText');
