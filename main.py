@@ -3094,9 +3094,6 @@ def game_command(message):
 def callback_handler(call):
     try:
         data=call.data or ""; uid=call.from_user.id; chat_id=call.message.chat.id if call.message else uid
-        if data.startswith("ultimate:"):
-            handle_ultimate_callback(call, data)
-            return
         if data.startswith("arcade:play:"):
             send_selected_game(call, int(data.rsplit(":", 1)[1]))
             return
@@ -3291,4 +3288,362 @@ def callback_handler(call):
                 return
             if data == "gpanel:help":
                 bot.answer_callback_query(call.id)
-                bot.send_message(chat_id, "📚 <b>راهنمای پنل MASIH GUARD</b>\nاعضا می‌توانند قوانین، آمار و راهنما را ببینند. دکمه‌های قفل‌شده فقط برای مدیران گروه فعال می‌شوند. برای تغییر تنظیمات، ربات باید مدیر گروه و دارای مجوزهای لازم باشد.\nبرای پرسش از دستیار بنویس: <code>ربات [سؤالت]</code> 
+                bot.send_message(chat_id, "📚 <b>راهنمای پنل MASIH GUARD</b>\nاعضا می‌توانند قوانین، آمار و راهنما را ببینند. دکمه‌های قفل‌شده فقط برای مدیران گروه فعال می‌شوند. برای تغییر تنظیمات، ربات باید مدیر گروه و دارای مجوزهای لازم باشد.\nبرای پرسش از دستیار بنویس: <code>ربات [سؤالت]</code> یا روی پیام ربات پاسخ بده.")
+                return
+            if data == "gpanel:games":
+                bot.answer_callback_query(call.id)
+                game_url = get_game_url()
+                if game_url.startswith("https://"):
+                    game_kb = types.InlineKeyboardMarkup()
+                    game_kb.add(types.InlineKeyboardButton("🎮 باز کردن بازی‌ها", url=game_url))
+                    bot.send_message(chat_id, "🎮 <b>MASIH GUARD ARCADE</b>", reply_markup=game_kb)
+                else:
+                    bot.send_message(chat_id, "⚠️ آدرس بازی هنوز در هاست تنظیم نشده است.")
+                return
+            if data == "gpanel:refresh":
+                bot.answer_callback_query(call.id)
+                current_section = GROUP_PANEL_PAGES.get((int(chat_id), int(call.message.message_id)), "home")
+                send_group_panel(chat_id, call.message.message_id, user_id=uid, section=current_section)
+                return
+            if not is_group_admin(chat_id, uid):
+                bot.answer_callback_query(call.id, "⛔ فقط مدیر گروه یا مالک اجازه تغییر تنظیمات دارد.", show_alert=True)
+                return
+            if data in {"gpanel:configure_force_join", "gpanel:configure_force_add"}:
+                action = "force_join" if data.endswith("force_join") else "force_add"
+                WAITING[uid] = {"action": action, "chat_id": int(chat_id)}
+                prompt = ("هر کانال را در یک خط بفرست: @channel | https://t.me/channel | نام نمایشی. حداکثر ۱۰ کانال؛ برای خاموش‌کردن بنویس خاموش."
+                          if action == "force_join" else
+                          "تعداد دعوت معتبر لازم را از ۱ تا ۱۰۰ بفرست. اعضا باید در گروه /mylink بزنند؛ برای خاموش‌کردن بنویس خاموش.")
+                bot.answer_callback_query(call.id, "ادامه تنظیم در پیام خصوصی")
+                try:
+                    bot.send_message(uid, "⚙️ تنظیمات گروه " + str(chat_id) + "\n" + prompt)
+                except Exception:
+                    bot.send_message(chat_id, "برای ادامهٔ تنظیمات، ابتدا ربات را در خصوصی باز کن و /start بزن.", reply_to_message_id=call.message.message_id)
+                return
+            if data.startswith("gpanel:toggle:"):
+                key = data.split(":", 2)[2]
+                allowed = {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "farewell_on", "media_lock", "phone_filter", "captcha_on", "anti_raid_on", "join_approval", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "smart_security"}
+                if key not in allowed:
+                    bot.answer_callback_query(call.id, "تنظیم نامعتبر است.", show_alert=True)
+                    return
+                settings = get_group_settings(chat_id)
+                next_enabled = not bool(settings.get(key, False))
+                required_permission = "can_delete_messages" if key in {"anti_link", "anti_ads", "anti_tapchi", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes"} else (
+                    "can_restrict_members" if key in {"captcha_on", "anti_raid_on"} else
+                    "can_invite_users" if key == "join_approval" else "")
+                if next_enabled and required_permission and not bot_has_group_permission(chat_id, required_permission):
+                    friendly = {"can_delete_messages": "حذف پیام‌ها", "can_restrict_members": "محدودکردن اعضا", "can_invite_users": "دعوت کاربران/مدیریت درخواست ورود"}.get(required_permission, required_permission)
+                    bot.answer_callback_query(call.id, f"برای فعال‌کردن این قابلیت، ربات باید مجوز «{friendly}» داشته باشد.", show_alert=True)
+                    return
+                settings[key] = next_enabled
+                save_data()
+                bot.answer_callback_query(call.id, "روشن شد." if settings[key] else "خاموش شد.")
+                current_section = GROUP_PANEL_PAGES.get((int(chat_id), int(call.message.message_id)), "home")
+                send_group_panel(chat_id, call.message.message_id, user_id=uid, section=current_section)
+                return
+        management_action = data.startswith(("panel:", "toggle:", "ask:", "show:"))
+        if management_action:
+            if not call.message or call.message.chat.type != "private" or call.message.chat.id != uid:
+                bot.answer_callback_query(call.id, "پنل فقط در گفت‌وگوی خصوصی ربات نمایش داده می‌شود.", show_alert=True); return
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
+        if data.startswith("payout:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
+            parts = data.split(":", 2)
+            if len(parts) != 3 or parts[1] not in {"paid", "reject"}:
+                bot.answer_callback_query(call.id, "درخواست برداشت نامعتبر است.", show_alert=True); return
+            result = decide_payout_request(parts[2], parts[1] == "paid", uid)
+            bot.answer_callback_query(call.id, result[:180], show_alert=True)
+            try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception: pass
+            bot.send_message(uid, result)
+            return
+        if data.startswith("subreq:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id, "⛔ این پنل مخصوص مالک رباته!", show_alert=True); return
+            parts = data.split(":", 2)
+            if len(parts) != 3 or parts[1] not in {"approve", "reject"}:
+                bot.answer_callback_query(call.id, "درخواست نامعتبر است.", show_alert=True); return
+            result = decide_subscription_request(parts[2], parts[1] == "approve", uid)
+            bot.answer_callback_query(call.id, result[:180], show_alert=True)
+            try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception: pass
+            bot.send_message(uid, result)
+            return
+        if data.startswith("user:") or data.startswith("shop:"):
+            if not call.message or call.message.chat.type!="private":
+                bot.answer_callback_query(call.id,"این گزینه را در گفت‌وگوی خصوصی ربات استفاده کن.",show_alert=True); return
+            ensure_user(uid,call.from_user.username,call.from_user.first_name)
+            if data.startswith("user:receipt:"):
+                rid = data.split(":", 2)[2]
+                req = DATA.get("subscription_requests", {}).get(rid)
+                if not req or int(req.get("user_id", 0)) != int(uid) or req.get("status") != "pending":
+                    bot.answer_callback_query(call.id, "درخواست معتبر یا در انتظار پرداخت پیدا نشد.", show_alert=True)
+                    return
+                WAITING[uid] = {"action": "payment_receipt", "request_id": rid}
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid, f"📤 لطفاً عکس رسید پرداخت را همین‌جا ارسال کن.\nشناسه درخواست: <code>{esc(rid)}</code>\nشناسه عددی تلگرام تو: <code>{uid}</code>\nتا بررسی مالک، اشتراک فعال نمی‌شود.")
+                return
+            if data=="user:home":
+                bot.answer_callback_query(call.id); bot.send_message(uid,public_features_text(),reply_markup=public_keyboard()); return
+            if data=="user:wallet": bot.answer_callback_query(call.id); bot.send_message(uid,public_wallet(uid)); return
+            if data=="user:shop": bot.answer_callback_query(call.id); bot.send_message(uid,shop_text(uid),reply_markup=shop_keyboard()); return
+            if data=="user:referrals": bot.answer_callback_query(call.id); bot.send_message(uid,referral_text(uid)); return
+            if data=="user:transactions": bot.answer_callback_query(call.id); bot.send_message(uid,transactions_text(uid)); return
+            if data=="user:payout":
+                WAITING[uid]={"action":"payout_amount"}
+                bot.answer_callback_query(call.id); bot.send_message(uid, f"💸 مبلغ برداشت را به تومان وارد کن. موجودی فعلی: {wallet(uid):,} تومان\nروش پرداخت را بعداً با مالک هماهنگ می‌کنی؛ اطلاعات بانکی را اینجا نفرست."); return
+            if data=="user:font":
+                WAITING[uid]={"action":"public_font_text"}; bot.answer_callback_query(call.id); bot.send_message(uid,"🔤 ۲۰۰ سبک فونت کاملاً رایگان است. متن را بفرست؛ خروجی در ۲۰ پیام ۱۰تایی نمایش داده می‌شود."); return
+            if data=="user:proxies":
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid,proxy_list_text(limit=10, with_ping=False)); return
+            if data=="user:ticket":
+                WAITING[uid]={"action":"ticket"}; bot.answer_callback_query(call.id); bot.send_message(uid,"متن تیکت پشتیبانی را بفرست."); return
+            if data=="user:ai":
+                WAITING[uid]={"action":"ai"}; bot.answer_callback_query(call.id); bot.send_message(uid,"سؤال خود را برای هوش مصنوعی بفرست."); return
+            if data.startswith("shop:request:"):
+                _,_,days,price=data.split(":")
+                result=request_subscription(uid,int(days),int(price))
+                pending_rows = [(rid, req) for rid, req in DATA.get("subscription_requests", {}).items()
+                                if int(req.get("user_id", 0)) == int(uid) and req.get("status") == "pending"]
+                receipt_markup = types.InlineKeyboardMarkup(row_width=1)
+                if pending_rows:
+                    rid, _req = pending_rows[-1]
+                    receipt_markup.add(types.InlineKeyboardButton("📤 ارسال رسید پرداخت", callback_data=f"user:receipt:{rid}"))
+                receipt_markup.add(types.InlineKeyboardButton("👨‍💻 ارتباط با سازنده", url=OWNER_CONTACT_URL))
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid,result,reply_markup=receipt_markup)
+                return
+
+        if data.startswith("group_rules:"):
+            try: target=int(data.split(":",1)[1])
+            except ValueError: target=0
+            if target and is_group_licensed(target):
+                bot.answer_callback_query(call.id)
+                bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
+            else: bot.answer_callback_query(call.id,"این گروه مجوز فعال ندارد.",show_alert=True)
+            return
+        if data=="panel:open":
+            PANEL_HISTORY[uid]=[]
+            send_panel(uid,"home",user_id=uid)
+            bot.answer_callback_query(call.id)
+            return
+        if data=="panel:back":
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            history=PANEL_HISTORY.setdefault(uid,[]); section=history.pop() if history else "home"
+            send_panel(chat_id,section,call.message.message_id if call.message else None,user_id=uid)
+            bot.answer_callback_query(call.id); return
+        if data=="panel:home":
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            PANEL_HISTORY[uid]=[]; send_panel(chat_id,"home",call.message.message_id if call.message else None,user_id=uid)
+            bot.answer_callback_query(call.id); return
+        if data.startswith("panel:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            section=data.split(":",1)[1]
+            if section not in SECTIONS: bot.answer_callback_query(call.id,"بخش شناخته نشد."); return
+            previous=PANEL_CURRENT.get(uid,"home")
+            if previous!=section: PANEL_HISTORY.setdefault(uid,[]).append(previous)
+            send_panel(chat_id,section,call.message.message_id if call.message else None,user_id=uid)
+            bot.answer_callback_query(call.id); return
+        if data.startswith("toggle:"):
+            setting=data.split(":",1)[1]
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            if setting=="smart_security":
+                DATA["settings"]["smart_security"]=not DATA["settings"].get("smart_security",True); save_data()
+                bot.answer_callback_query(call.id,"امنیت هوشمند سراسری: "+("روشن" if DATA["settings"]["smart_security"] else "خاموش")); send_panel(chat_id,"smart",call.message.message_id if call.message else None,user_id=uid); return
+            WAITING[uid]={"action":"toggle_group_setting","setting":"smart_security" if setting=="group_smart_security" else setting}
+            bot.answer_callback_query(call.id)
+            bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با ‎-100‎ شروع می‌شود).")
+            return
+        if data.startswith("ask:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            action=data.split(":",1)[1]
+            global_actions={"public_features","channel_url","website_url","referral_reward_toman","subscription_packages","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","announcement","group_stats","group_settings","search_logs","register_bot_admin","remove_bot_admin"}
+            if action in global_actions:
+                WAITING[uid]={"action":action}
+                prompts={
+                    "public_features":"متن معرفی کاربران در /start را بفرست. برای رفتن به خط بعدی از خط جدید استفاده کن؛ این متن به‌صورت ساده نمایش داده می‌شود.",
+                    "channel_url":"لینک کامل کانال با https:// را بفرست.",
+                    "website_url":"لینک کامل وب‌سایت با https:// را بفرست.",
+                    "referral_reward_toman":"مبلغ پاداش هر دعوت معتبر را به تومان وارد کن (پیش‌فرض ۵۰۰۰).",
+                    "subscription_packages":"بسته‌ها را به شکل روز:قیمت وارد کن؛ مثال: 30:40000,60:80000,90:120000 . این فهرست جایگزین بسته‌های قبلی می‌شود.",
+                    "wallet_adjust":"قالب: شناسه کاربر | مبلغ (+برای افزایش و -برای کاهش) | دلیل تغییر",
+                    "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "member_info":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.",
+                    "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).",
+                    "extend_group":"شناسه گروه | تعداد روز را بفرست.",
+                    "revoke_group":"شناسه گروه را بفرست.",
+                    "announcement":"شناسه گروه | متن اطلاعیه را بفرست.",
+                    "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).",
+                    "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).",
+                    "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.",
+                    "register_bot_admin":"فقط نام کاربری تلگرام را با @ بفرست؛ نمونه: @username\nنکته امنیتی: آن شخص باید قبلاً ربات را باز کرده و /start زده باشد.",
+                    "remove_bot_admin":"نام کاربری ادمینی را که می‌خواهی دسترسی‌اش حذف شود با @ بفرست؛ نمونه: @username"
+                }
+                bot.answer_callback_query(call.id); bot.send_message(uid,prompts[action]); return
+            group_actions={"welcome_text","farewell_text","rules","auto_reply","delete_reply","bad_word","warn_limit","whitelist","add_custom_command","delete_custom_command","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","force_join","force_add"}
+            if action in group_actions:
+                WAITING[uid]={"action":"select_group_for_action","next_action":action}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"🆔 شناسه گروه را بفرست (معمولاً با -100 شروع می‌شود). سپس مقدار تنظیم را می‌پرسم."); return
+            WAITING[uid]={"action":action,"chat_id":chat_id}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","farewell_text":"متن خداحافظی را بفرست؛ {name} نام کاربر را جایگزین می‌کند.","add_note":"قالب یادداشت: نام کوتاه | متن یادداشت. در گروه با #نام یادداشت نمایش داده می‌شود.","delete_note":"نام یادداشتی را که می‌خواهی حذف شود بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی پاسخ خودکار را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","mute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unmute":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","ban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","unban":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","kick":"شناسه کاربر یا گروه | شناسه کاربر را بفرست.","font":"متن را بفرست.","add_proxy":"لینک t.me/proxy یا tg://proxy را بفرست.","delete_proxy":"شماره پروکسی را بفرست.","add_customer":"قالب: شناسه | نام | توضیحات","find_customer":"شناسه مشتری را بفرست.","ticket":"متن تیکت را بفرست.","ai":"سؤال خود را بفرست.","warn_limit":"سقف اخطار بین ۱ تا ۲۰ را بفرست.", "add_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "remove_whitelist":"شناسه گروه | شناسه کاربر را بفرست.", "member_info":"شناسه گروه | شناسه کاربر را بفرست.", "clear_warnings":"شناسه گروه | شناسه کاربر را بفرست.", "activate_group":"ربات را مدیر گروه کن؛ سپس داخل همان گروه بنویس: فعال سازی ۳۰ روز (عدد ۰ یعنی دائمی).", "extend_group":"شناسه گروه | تعداد روز را بفرست.", "revoke_group":"شناسه گروه را بفرست.", "add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.", "announcement":"شناسه گروه | متن اطلاعیه را بفرست.", "group_stats":"شناسه گروه را بفرست (مثلاً -1001234567890).", "group_settings":"شناسه گروه را بفرست (مثلاً -1001234567890).", "search_logs":"عبارت یا شناسه‌ای برای جست‌وجو در گزارش‌ها بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف خوشامد به ثانیه (۰ تا ۳۶۰۰) را بفرست."}
+            bot.answer_callback_query(call.id); bot.send_message(uid,prompts.get(action,"اطلاعات موردنیاز را بفرست.")); return
+        if data.startswith("show:"):
+            if not is_owner(uid):
+                bot.answer_callback_query(call.id,"⛔ این پنل مخصوص مالک رباته!",show_alert=True); return
+            action=data.split(":",1)[1]
+            if action in {"ban_list","mute_list","whitelist"}:
+                WAITING[uid]={"action":"show_list_group","list_type":action}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست (مثلاً -1001234567890).")
+                return
+            if action == "rules":
+                WAITING[uid]={"action":"show_rules_group"}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا قوانین همان گروه نمایش داده شود.")
+                return
+            if action == "notes":
+                WAITING[uid]={"action":"show_notes_group"}
+                bot.answer_callback_query(call.id); bot.send_message(uid,"شناسه گروه را بفرست تا یادداشت‌های همان گروه نمایش داده شوند.")
+                return
+            if action == "bot_admins":
+                admins = DATA.setdefault("bot_admins", {})
+                if not admins:
+                    body = "📋 هنوز ادمین جانبی ثبت نشده است."
+                else:
+                    lines = []
+                    for admin_id, row in admins.items():
+                        username = row.get("username", "") if isinstance(row, dict) else str(row)
+                        lines.append(f"• @{esc(username.lstrip('@'))} — شناسه: <code>{esc(admin_id)}</code>")
+                    body = "👮 <b>ادمین‌های ثبت‌شده</b>\n━━━━━━━━━━━━━━\n" + "\n".join(lines)
+                bot.answer_callback_query(call.id); bot.send_message(uid, body); return
+            WAITING[uid]={"action":"show_"+action,"chat_id":chat_id}
+            bot.answer_callback_query(call.id); handle_show(uid,action); WAITING.pop(uid,None); return
+        if data=="game:guess":
+            GAMES[uid]=random.randint(1,5); WAITING[uid]={"action":"game:guess","chat_id":uid}
+            bot.answer_callback_query(call.id); bot.send_message(uid,"🎮 عددی بین ۱ تا ۵ حدس بزن و بفرست."); return
+        bot.answer_callback_query(call.id,"گزینه ناشناخته است.")
+    except Exception as e:
+        print("Callback error:",repr(e))
+        try: bot.answer_callback_query(call.id,"خطا رخ داد؛ دوباره تلاش کن.",show_alert=True)
+        except Exception: pass
+
+@bot.message_handler(content_types=["photo"], func=lambda m: m.chat.type == "private")
+def private_receipt_photo_handler(message):
+    uid = int(message.from_user.id)
+    pending = WAITING.get(uid, {})
+    if pending.get("action") != "payment_receipt":
+        return
+    rid = str(pending.get("request_id", ""))
+    req = DATA.get("subscription_requests", {}).get(rid)
+    if not req or int(req.get("user_id", 0)) != uid or req.get("status") != "pending":
+        WAITING.pop(uid, None)
+        safe_reply_to(message, "⚠️ درخواست پرداخت معتبر نیست یا قبلاً بررسی شده است.")
+        return
+    photo = getattr(message, "photo", None) or []
+    if not photo:
+        safe_reply_to(message, "لطفاً عکس رسید را به‌صورت تصویر ارسال کن.")
+        return
+    file_id = getattr(photo[-1], "file_id", "")
+    if not file_id:
+        safe_reply_to(message, "⚠️ دریافت شناسهٔ تصویر ناموفق بود؛ دوباره ارسال کن.")
+        return
+    req["receipt_file_id"] = file_id
+    req["receipt_user_id"] = uid
+    req["receipt_received_at"] = now_text()
+    req["receipt_message_id"] = int(message.message_id)
+    save_data()
+    caption = (f"🧾 <b>رسید پرداخت اشتراک</b>\nدرخواست: <code>{esc(rid)}</code>\n"
+               f"شناسه عددی کاربر: <code>{uid}</code>\nمدت: {int(req.get('days', 0))} روز\n"
+               f"مبلغ: {int(req.get('price_toman', 0)):,} تومان\n"
+               "⚠️ رسید را دستی بررسی کن؛ دریافت تصویر به معنی تأیید پرداخت نیست.")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(types.InlineKeyboardButton("✅ تأیید و فعال‌سازی", callback_data=f"subreq:approve:{rid}"),
+           types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"subreq:reject:{rid}"))
+    try:
+        bot.send_photo(OWNER_ID, file_id, caption=caption, reply_markup=kb)
+        WAITING.pop(uid, None)
+        safe_reply_to(message, "✅ رسید برای مالک ارسال شد. پس از بررسی، نتیجه اعلام می‌شود؛ اشتراک هنوز فعال نشده است.")
+    except Exception as e:
+        print("Receipt forwarding error:", repr(e))
+        safe_reply_to(message, "⚠️ رسید ذخیره شد، اما ارسال آن به مالک ناموفق بود. کمی بعد دوباره تلاش کن.")
+
+
+@bot.message_handler(content_types=["text"], func=lambda m: m.chat.type=="private")
+def private_text_handler(message):
+    uid=message.from_user.id; text=(message.text or "").strip()
+    ensure_user(uid,message.from_user.username,message.from_user.first_name)
+    if text.startswith("/"): return
+    normalized_private = text.replace("ي", "ی").replace("ك", "ک").strip().casefold()
+    # Direct utilities are intentionally command-triggered, not unsolicited chat.
+    compact = re.sub(r"[\s‌]+", "", normalized_private)
+    if compact in {"پروکسی", "لیستپروکسی", "لیستپروکسیها", "پروکسیها", "پروکسیلیست", "پروکسیلیستها", "proxy", "proxies", "proxylist"}:
+        bot.send_message(uid, proxy_list_text(limit=20, with_ping=True)); return
+    if compact in {"فونت", "لیستفونت", "فونتها", "لیستفونتها", "فونتلیست", "فونتلیستها", "فونت۲۰۰", "فونت200", "font", "fonts", "fontlist"}:
+        WAITING[uid] = {"action":"public_font_text"}
+        bot.send_message(uid, "🔤 متن یا اسم دلخواهت رو بفرست تا ۲۰۰ مدل فونت فانتزی و جیگول میگول بسازم.")
+        return
+    if compact in {"بازی", "یهبازی", "بازیها", "بازی ها", "game", "play"}:
+        send_random_game(message); return
+    if normalized_private in {"هوش", "هوش مصنوعی", "دستیار", "دستیار هوشمند"}:
+        bot.send_message(uid, "🧠 دستیار آماده است. درخواستت رو بعد از «هوش» بنویس؛ مثلاً «هوش این متن رو خلاصه کن» یا «هوش راهنمای قفل لینک رو بگو».")
+        return
+    # Recognize panel commands in private chat too; previously they were silently ignored.
+    if normalized_private in {"پنل", "پنل مدیریت", "پنل مالک", "مدیریت"}:
+        if is_owner(uid):
+            bot.send_message(uid, "🔐 پنل خصوصی مالک باز شد.")
+            send_panel(uid, user_id=uid)
+        else:
+            bot.send_message(uid, "⛔ پنل مدیریت فقط برای مالک ربات است.")
+        return
+    if normalized_private in {"سلام", "سلام ربات", "درود", "راهنما", "امکانات", "شروع", "help", "hi", "hello"}:
+        bot.send_message(uid, start_welcome_text(message.from_user),
+                         reply_markup=owner_start_keyboard() if is_owner(uid) else public_keyboard())
+        return
+    question = ""
+    for prefix in ("از ربات بپرس ", "دستیار ", "ربات ", "هوش مصنوعی ", "هوش ", "هوش‌ ", "هش ", "هوس ", "هوشصنعتی "):
+        if normalized_private.startswith(prefix):
+            question = text[len(prefix):].strip()
+            break
+    replied = getattr(message, "reply_to_message", None)
+    if not question and replied and getattr(getattr(replied, "from_user", None), "is_bot", False) and text and not text.startswith("/"):
+        question = text
+    if question:
+        status = safe_reply_to(message, "🧠 دارم بررسی می‌کنم…")
+        answer = ask_ai(question)
+        try: bot.edit_message_text(esc(answer[:3900]), status.chat.id, status.message_id)
+        except Exception: safe_reply_to(message, esc(answer[:3900]))
+        return
+    public_shortcuts = {
+        "کیف پول": "user:wallet", "موجودی": "user:wallet", "wallet": "user:wallet",
+        "خرید اشتراک": "user:shop", "اشتراک": "user:shop", "shop": "user:shop",
+        "زیرمجموعه": "user:referrals", "دعوت‌ها": "user:referrals", "دعوت ها": "user:referrals",
+        "تراکنش": "user:transactions", "تراکنش‌ها": "user:transactions", "تراکنش ها": "user:transactions",
+        "امکانات": "user:home", "راهنما": "user:home", "help": "user:home",
+    }
+    shortcut = public_shortcuts.get(text.casefold())
+    if shortcut == "user:wallet": bot.send_message(uid, public_wallet(uid)); return
+    if shortcut == "user:shop": bot.send_message(uid, shop_text(uid), reply_markup=shop_keyboard()); return
+    if shortcut == "user:referrals": bot.send_message(uid, referral_text(uid)); return
+    if shortcut == "user:transactions": bot.send_message(uid, transactions_text(uid)); return
+    if shortcut == "user:home": bot.send_message(uid, public_features_text(), reply_markup=public_keyboard()); return
+    pending=WAITING.get(uid)
+    if not pending: return
+    action=pending.get("action",""); chat_id=pending.get("chat_id",uid)
+    owner_only={"add_proxy","delete_proxy","add_customer","find_customer","delete_reply","bad_word","warn_limit","toggle_group_setting","select_group_for_action",
+                "public_features","channel_url","website_url","referral_reward_toman","subscription_packages","wallet_adjust","add_whitelist","remove_whitelist","member_info","clear_warnings","activate_group","extend_group","revoke_group","add_custom_command","delete_custom_command","announcement","group_stats","group_settings","search_logs",
+                "welcome_text","farewell_text","rules","auto_reply","add_note","delete_note","quiet_hours","welcome_image","welcome_delete_seconds","warn","mute","unmute","ban","unban","kick","show_list_group","show_rules_group","show_notes_group","register_bot_admin","remove_bot_admin"}
+    # These actions are owner-only when launched from the owner's private panel,
+    # but group administrators may configure the group they administer through
+    # the group panel. The target chat ID is stored in WAITING and re-verified.
+    group_admin_waiting_actions = {
+        "delete_reply", "bad_word", "warn_limit", "add_custom_command", "delete_custom_command",
+        "welcome_text", "farewell_text", "rules", "auto_reply", "add_note", "delete_note",
+        "quiet_hours", "welcome_image", "welcome_delete_s
