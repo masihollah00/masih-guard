@@ -3646,4 +3646,983 @@ def private_text_handler(message):
     group_admin_waiting_actions = {
         "delete_reply", "bad_word", "warn_limit", "add_custom_command", "delete_custom_command",
         "welcome_text", "farewell_text", "rules", "auto_reply", "add_note", "delete_note",
-        "quiet_hours", "welcome_image", "welcome_delete_s
+        "quiet_hours", "welcome_image", "welcome_delete_seconds", "warn", "mute", "unmute",
+        "ban", "unban", "kick", "show_list_group", "show_rules_group", "show_notes_group"
+    }
+    if action in owner_only and not is_owner(uid):
+        group_scoped = False
+        try:
+            group_scoped = int(chat_id) < 0 and action in group_admin_waiting_actions
+        except (TypeError, ValueError):
+            group_scoped = False
+        if not group_scoped or not is_group_admin(chat_id, uid):
+            WAITING.pop(uid,None); bot.send_message(uid,"⛔ این عملیات فقط برای مالک ربات یا مدیر مجاز همان گروه است."); return
+    try:
+        if action in {"register_bot_admin", "remove_bot_admin"}:
+            if not is_owner(uid):
+                WAITING.pop(uid, None)
+                bot.send_message(uid, "⛔ فقط مالک اصلی می‌تواند ادمین ربات ثبت یا حذف کند.")
+                return
+            username = text.strip()
+            if not re.fullmatch(r"@[A-Za-z0-9_]{5,32}", username):
+                raise ValueError("فقط نام کاربری معتبر با @ وارد کن؛ نمونه: @username")
+            wanted = username[1:].casefold()
+            found_id = None
+            for known_id, profile in DATA.setdefault("users", {}).items():
+                if isinstance(profile, dict) and str(profile.get("username", "")).lstrip("@").casefold() == wanted:
+                    found_id = str(known_id)
+                    break
+            if action == "register_bot_admin":
+                if found_id is None:
+                    raise ValueError("این کاربر هنوز در ربات شناخته نشده است. از او بخواه یک‌بار ربات را باز کند و /start بزند؛ سپس دوباره همین @username را ثبت کن.")
+                if int(found_id) == OWNER_ID:
+                    raise ValueError("مالک اصلی از قبل دسترسی کامل دارد و نیازی به ثبت مجدد ندارد.")
+                DATA.setdefault("bot_admins", {})[found_id] = {
+                    "username": username[1:],
+                    "added_by": int(uid),
+                    "added_at": now_text()
+                }
+                save_data(); add_log("bot_admin_registered", "", uid, f"target={found_id}; username={username}")
+                WAITING.pop(uid, None)
+                bot.send_message(uid, f"✅ ادمین فروش ثبت شد: <b>{esc(username)}</b>\nاین ادمین می‌تواند مجوز گروه‌ها را فعال کند؛ اما به پنل مالک، تنظیمات حساس، اطلاعات مالی و مدیریت ادمین‌ها دسترسی ندارد.")
+                try:
+                    bot.send_message(int(found_id), "👮 دسترسی ادمین فروش MASIH GUARD برایت فعال شد. برای فعال‌کردن گروه، ربات باید در همان گروه ادمین باشد؛ سپس داخل گروه بنویس: فعال سازی ۳۰ روز. این دسترسی اجازه تغییر مالک یا مدیریت ادمین‌ها را نمی‌دهد.")
+                except Exception:
+                    pass
+                return
+            admins = DATA.setdefault("bot_admins", {})
+            if found_id is None:
+                for admin_id, row in admins.items():
+                    stored_name = row.get("username", "") if isinstance(row, dict) else str(row)
+                    if stored_name.lstrip("@").casefold() == wanted:
+                        found_id = str(admin_id); break
+            if found_id is None or found_id not in admins:
+                raise ValueError("ادمینی با این @username پیدا نشد.")
+            admins.pop(found_id, None)
+            save_data(); add_log("bot_admin_removed", "", uid, f"target={found_id}; username={username}")
+            WAITING.pop(uid, None)
+            bot.send_message(uid, f"✅ دسترسی ادمین {esc(username)} حذف شد.")
+            try: bot.send_message(int(found_id), "ℹ️ دسترسی ادمین فروش ربات توسط مالک اصلی حذف شد.")
+            except Exception: pass
+            return
+        if action in {"public_features","channel_url","website_url","referral_reward_toman","subscription_packages"}:
+            cfg = bot_settings()
+            if action == "public_features":
+                if text.casefold() in {"پیش‌فرض", "default", "بازنشانی"}:
+                    cfg["public_features"] = ""
+                    message_text = "✅ متن معرفی به حالت پیش‌فرض برگشت."
+                else:
+                    if len(text) > 3500: raise ValueError("متن معرفی حداکثر ۳۵۰۰ نویسه باشد.")
+                    cfg["public_features"] = text
+                    message_text = "✅ متن معرفی /start ذخیره شد."
+            elif action in ("channel_url", "website_url"):
+                if not text.startswith(("https://", "http://")) or len(text) > 500:
+                    raise ValueError("لینک کامل با https:// یا http:// وارد کن.")
+                cfg[action] = text
+                message_text = "✅ لینک ذخیره شد."
+            elif action == "referral_reward_toman":
+                value = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+                if not 0 <= value <= 1000000: raise ValueError("مبلغ باید بین ۰ تا ۱٬۰۰۰٬۰۰۰ تومان باشد.")
+                cfg["referral_reward_toman"] = value
+                message_text = f"✅ پاداش دعوت روی {value:,} تومان تنظیم شد."
+            elif action == "subscription_packages":
+                normalized = text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+                parsed = []
+                for item in normalized.split(","):
+                    pair = item.strip().split(":")
+                    if len(pair) != 2: raise ValueError("قالب درست: 30:40000,60:80000,90:120000")
+                    days, price = int(pair[0].strip()), int(pair[1].strip())
+                    if not 1 <= days <= 3650 or not 0 <= price <= 2_000_000_000:
+                        raise ValueError("مدت باید ۱ تا ۳۶۵۰ روز و قیمت ۰ تا ۲٬۰۰۰٬۰۰۰٬۰۰۰ تومان باشد.")
+                    if any(existing[0] == days for existing in parsed):
+                        raise ValueError("مدت هر بسته باید یکتا باشد؛ یک مدت را دوبار ننویس.")
+                    parsed.append([days, price])
+                    if len(parsed) > 10: raise ValueError("حداکثر ۱۰ بسته می‌توانی ثبت کنی.")
+                if not parsed: raise ValueError("حداقل یک بسته لازم است.")
+                cfg["subscription_packages"] = parsed
+                message_text = "✅ بسته‌های اشتراک ذخیره شدند: " + "، ".join(f"{days} روز / {price:,} تومان" for days, price in parsed)
+            save_data(); add_log("bot_setting_updated", "", uid, action)
+            WAITING.pop(uid, None)
+            bot.send_message(uid, message_text)
+            return
+        if action=="show_rules_group":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            if not is_group_licensed(target): raise PermissionError("این گروه مجوز فعال ندارد.")
+            bot.send_message(uid,"📜 <b>قوانین گروه</b>\n"+esc(get_group_settings(target).get("rules","قوانینی ثبت نشده است.")))
+            WAITING.pop(uid,None); return
+        if action=="show_notes_group":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            notes=get_group_settings(target).get("notes", {})
+            body="\n\n".join(f"<b>#{esc(k)}</b>\n{esc(v)}" for k,v in notes.items())
+            bot.send_message(uid,"📝 <b>یادداشت‌های گروه</b>\n"+(body or "یادداشتی ثبت نشده است."))
+            WAITING.pop(uid,None); return
+        if action == "payout_amount":
+            amount = int(text)
+            result = request_payout(uid, amount)
+            WAITING.pop(uid, None)
+            bot.send_message(uid, result)
+            return
+        if action == "wallet_adjust":
+            parts = [x.strip() for x in text.split("|", 2)]
+            if len(parts) != 3: raise ValueError("قالب: شناسه کاربر | مبلغ (+/-) | دلیل")
+            target_uid, amount = int(parts[0]), int(parts[1])
+            if amount == 0: raise ValueError("مبلغ تغییر موجودی نمی‌تواند صفر باشد.")
+            if not transaction(target_uid, amount, "تغییر دستی مالک: " + parts[2][:80]):
+                raise ValueError("موجودی کاربر برای این کسر کافی نیست.")
+            add_log("wallet_adjusted", "", target_uid, f"amount_toman={amount}; reason={parts[2][:100]}")
+            WAITING.pop(uid, None)
+            bot.send_message(uid, f"✅ موجودی کاربر {target_uid} به اندازهٔ {amount:+,} تومان تغییر کرد. موجودی جدید: {wallet(target_uid):,} تومان")
+            try: bot.send_message(target_uid, f"💳 کیف پول شما توسط مالک به‌روزرسانی شد.\nمبلغ تغییر: {amount:+,} تومان\nموجودی جدید: {wallet(target_uid):,} تومان\nدلیل: {esc(parts[2][:120])}")
+            except Exception: pass
+            return
+        if action=="show_list_group":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            list_type=pending.get("list_type")
+            if list_type=="whitelist":
+                values=get_group_settings(target).get("whitelist",[])
+                heading="📂 <b>فهرست کاربران مجاز</b>"
+            else:
+                kind="banned" if list_type=="ban_list" else "muted"
+                values=DATA.setdefault("moderation_lists",{}).get(str(target),{}).get(kind,[])
+                heading="📋 <b>فهرست ثبت‌شده توسط ربات</b>"
+            bot.send_message(uid,(heading+"\n"+"\n".join(f"• <code>{esc(x)}</code>" for x in values)) if values else "فهرست برای این گروه خالی است.")
+            WAITING.pop(uid,None); return
+        if action=="select_group_for_action":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            next_action=pending.get("next_action","")
+            WAITING[uid]={"action":next_action,"chat_id":target}
+            prompts={"welcome_text":"متن خوشامد را بفرست؛ می‌توانی {name} بگذاری.","farewell_text":"متن خداحافظی را بفرست.","rules":"قوانین جدید را بفرست.","auto_reply":"قالب: کلمه کلیدی | متن پاسخ","delete_reply":"کلمه کلیدی را بفرست.","bad_word":"کلمه ممنوع را بفرست.","warn_limit":"سقف اخطار ۱ تا ۲۰ را بفرست.","whitelist":"شناسه گروه را بفرست تا فهرست کاربران مجاز نمایش داده شود.","add_custom_command":"قالب: نام فرمان بدون ! | متن پاسخ","delete_custom_command":"نام فرمان را بفرست.","add_note":"قالب: نام کوتاه | متن یادداشت","delete_note":"نام یادداشت را بفرست.", "quiet_hours":"بازهٔ سکوت را به شکل 23:00-07:00 بفرست؛ برای خاموش‌کردن بنویس خاموش.", "welcome_image":"لینک مستقیم تصویر (https://...) را بفرست؛ برای حذف تصویر بنویس حذف.", "welcome_delete_seconds":"زمان حذف پیام خوشامد را به ثانیه بفرست (۰ یعنی حذف خودکار خاموش؛ حداکثر ۳۶۰۰).", "force_join":"هر کانال را در یک خط بفرست: @channel | https://t.me/channel | نام نمایشی. برای خاموش‌کردن بنویس خاموش.", "force_add":"تعداد دعوت معتبر لازم را از ۱ تا ۱۰۰ بفرست. برای خاموش‌کردن بنویس خاموش؛ اعضا باید با لینک /mylink دعوت شوند."}
+            bot.send_message(uid,"✅ گروه انتخاب شد.\n"+prompts.get(next_action,"مقدار تنظیم را بفرست.")); return
+        if action=="whitelist":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            values=get_group_settings(target).get("whitelist",[])
+            bot.send_message(uid,"📂 <b>کاربران مجاز</b>\n"+("\n".join(f"• <code>{esc(x)}</code>" for x in values) if values else "فهرست خالی است."))
+            WAITING.pop(uid,None); return
+        if action=="group_settings":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            cfg=get_group_settings(target)
+            lines=[f"🆔 شناسه گروه: <code>{target}</code>",f"🛡 مجوز نصب: {'فعال' if is_group_licensed(target) else 'غیرفعال'}"]
+            labels={"anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد تکرار","anti_raid_on":"ضد یورش ورود","captcha_on":"کپچا","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","smart_security":"امنیت هوشمند گروه","welcome_on":"خوشامدگویی","farewell_on":"خداحافظی","quiet_hours_on":"سکوت شبانه"}
+            for key,label in labels.items(): lines.append(f"{label}: {'روشن' if cfg.get(key,False) else 'خاموش'}")
+            lines.append(f"قوانین: {esc(cfg.get('rules',''))[:500]}")
+            bot.send_message(uid,"⚙️ <b>شناسه و تنظیمات گروه</b>\n"+"\n".join(lines))
+            WAITING.pop(uid,None); return
+        if action=="search_logs":
+            query=text.casefold()
+            rows=[]
+            for row in reversed(DATA.get("logs",[])):
+                blob=" ".join(str(row.get(k,"")) for k in ("time","action","chat_id","user_id","detail")).casefold()
+                if query in blob: rows.append(row)
+                if len(rows)>=20: break
+            result="\n\n".join(f"{esc(x.get('time'))} | {esc(log_action_label(x.get('action')))}\nگروه: <code>{esc(x.get('chat_id'))}</code> کاربر: <code>{esc(x.get('user_id'))}</code>\n{esc(x.get('detail'))}" for x in rows)
+            bot.send_message(uid,"🔎 <b>نتیجهٔ جست‌وجوی گزارش‌ها</b>\n"+(result or "موردی پیدا نشد."))
+            WAITING.pop(uid,None); return
+        if action=="group_stats":
+            target=int(text)
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            gs=DATA.setdefault("group_stats",{}).get(str(target),{})
+            active=len(DATA.setdefault("active_members",{}).get(str(target),{}))
+            bot.send_message(uid, f"📊 <b>آمار گروه</b> <code>{target}</code>\nپیام‌ها: {int(gs.get('messages',0))}\nمسدودشده‌ها: {int(gs.get('blocked',0))}\nورودها: {int(gs.get('joins',0))}\nخروج‌ها: {int(gs.get('leaves',0))}\nکاربران دیده‌شده: {active}")
+            WAITING.pop(uid,None); return
+        if action=="force_join":
+            if not is_group_admin(chat_id, uid):
+                raise PermissionError("فقط مدیر همان گروه می‌تواند جوین اجباری را تغییر دهد.")
+            cfg = get_group_settings(chat_id)
+            if text.casefold() in {"خاموش", "off", "0"}:
+                cfg["force_join_on"] = False
+                for cache_key in list(FORCE_JOIN_CACHE):
+                    if cache_key[0] == int(chat_id): FORCE_JOIN_CACHE.pop(cache_key, None)
+                save_data(); add_log("force_join_disabled", chat_id, uid, "جوین اجباری خاموش شد")
+                bot.send_message(uid, "✅ جوین اجباری برای این گروه خاموش شد.")
+            else:
+                if not bot_has_group_permission(chat_id, "can_delete_messages"):
+                    raise PermissionError("برای اجرای جوین اجباری، ربات باید در گروه مجوز حذف پیام‌ها داشته باشد.")
+                rows = []
+                for line in text.splitlines():
+                    if not line.strip():
+                        continue
+                    parts = [x.strip() for x in line.split("|", 2)]
+                    if len(parts) < 2:
+                        raise ValueError("قالب هر خط: @channel | https://t.me/channel | نام نمایشی")
+                    ident, url = parts[0], parts[1]
+                    title = parts[2] if len(parts) == 3 and parts[2] else ident
+                    if not ident or not url.startswith(("https://t.me/", "http://t.me/")):
+                        raise ValueError("شناسه کانال و لینک معتبر t.me لازم است.")
+                    rows.append({"id": ident, "url": url, "title": title[:80]})
+                    if len(rows) > 10:
+                        raise ValueError("حداکثر ۱۰ کانال می‌توانی تنظیم کنی.")
+                if not rows:
+                    raise ValueError("حداقل یک کانال لازم است.")
+                cfg["force_join_channels"] = rows
+                cfg["force_join_on"] = True
+                for cache_key in list(FORCE_JOIN_CACHE):
+                    if cache_key[0] == int(chat_id): FORCE_JOIN_CACHE.pop(cache_key, None)
+                save_data(); add_log("force_join_configured", chat_id, uid, f"channels={len(rows)}")
+                bot.send_message(uid, "✅ جوین اجباری فعال شد. برای بررسی قابل‌اعتماد، ربات باید در همهٔ کانال‌های تنظیم‌شده مدیر باشد؛ برای کانال خصوصی، شناسهٔ عددی و لینک دعوت معتبر لازم است.\nکانال‌ها:\n" + "\n".join("• " + esc(r["title"]) for r in rows))
+            WAITING.pop(uid, None); return
+        if action=="force_add":
+            if not is_group_admin(chat_id, uid):
+                raise PermissionError("فقط مدیر همان گروه می‌تواند اد اجباری را تغییر دهد.")
+            cfg = get_group_settings(chat_id)
+            if text.casefold() in {"خاموش", "off", "0"}:
+                cfg["force_add_on"] = False
+                save_data(); add_log("force_add_disabled", chat_id, uid, "اد اجباری خاموش شد")
+                bot.send_message(uid, "✅ اد اجباری برای این گروه خاموش شد.")
+            else:
+                if not bot_has_group_permission(chat_id, "can_delete_messages"):
+                    raise PermissionError("برای اجرای اد اجباری، ربات باید در گروه مجوز حذف پیام‌ها داشته باشد.")
+                count = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+                if not 1 <= count <= 100:
+                    raise ValueError("تعداد باید بین ۱ تا ۱۰۰ باشد.")
+                cfg["force_add_count"] = count
+                cfg["force_add_on"] = True
+                save_data(); add_log("force_add_configured", chat_id, uid, f"required={count}")
+                bot.send_message(uid, f"✅ اد اجباری فعال شد: دعوت {count} عضو معتبر لازم است. کاربران باید در گروه /mylink بزنند و عضو جدید با لینک اختصاصی آن‌ها وارد شود. تلگرام دعوت‌های بدون لینک اختصاصی را قابل انتساب قطعی نمی‌کند.")
+            WAITING.pop(uid, None); return
+        if action=="quiet_hours":
+            s=get_group_settings(chat_id)
+            if text.casefold() in {"خاموش","off","0"}:
+                s["quiet_hours_on"]=False
+                save_data(); bot.send_message(uid,"🌙 ساعت سکوت شبانه برای این گروه خاموش شد.")
+            else:
+                match=re.fullmatch(r"\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*",text)
+                if not match: raise ValueError("قالب درست: 23:00-07:00")
+                start,end=match.group(1),match.group(2)
+                datetime.strptime(start,"%H:%M"); datetime.strptime(end,"%H:%M")
+                s.update({"quiet_start":start,"quiet_end":end,"quiet_hours_on":True})
+                save_data(); add_log("quiet_hours_set",chat_id,uid,f"{start}-{end}")
+                bot.send_message(uid,f"🌙 ساعت سکوت گروه فعال شد: {start} تا {end}")
+            WAITING.pop(uid,None); return
+        if action=="welcome_image":
+            s=get_group_settings(chat_id)
+            if text.casefold() in {"حذف","پاک","off"}:
+                s["welcome_image"]=""; save_data(); bot.send_message(uid,"🗑 تصویر خوشامد حذف شد.")
+            else:
+                if not text.startswith(("https://","http://")) or len(text)>1000: raise ValueError("لینک مستقیم تصویر باید با https:// شروع شود.")
+                s["welcome_image"]=text; save_data(); bot.send_message(uid,"🖼 لینک تصویر خوشامد ذخیره شد.")
+            WAITING.pop(uid,None); return
+        if action=="welcome_delete_seconds":
+            seconds=int(text)
+            if not 0 <= seconds <= 3600: raise ValueError("زمان باید بین ۰ تا ۳۶۰۰ ثانیه باشد.")
+            get_group_settings(chat_id)["welcome_delete_seconds"]=seconds; save_data()
+            bot.send_message(uid,"🗑 حذف خودکار خوشامد: "+("خاموش" if seconds==0 else f"پس از {seconds} ثانیه"))
+            WAITING.pop(uid,None); return
+        if action=="toggle_group_setting":
+            target=int(text)
+            if target>=0: raise ValueError("شناسه گروه باید منفی باشد.")
+            setting=pending.get("setting",""); s=get_group_settings(target)
+            if not isinstance(s.get(setting),bool): raise ValueError("این تنظیم قابل تغییر نیست.")
+            next_enabled = not bool(s[setting])
+            deletion_filters = {"anti_link", "anti_ads", "anti_spam", "anti_repeat", "anti_forward", "media_lock", "lock_photos", "lock_videos", "lock_files", "lock_stickers", "lock_voice", "lock_video_notes", "phone_filter", "lock_mentions", "lock_hashtags", "lock_usernames"}
+            required_permission = "can_delete_messages" if setting in deletion_filters else (
+                "can_restrict_members" if setting in {"captcha_on", "anti_raid_on"} else
+                "can_invite_users" if setting == "join_approval" else "")
+            if next_enabled and required_permission and not bot_has_group_permission(target, required_permission):
+                friendly = {"can_delete_messages": "حذف پیام‌ها", "can_restrict_members": "محدودکردن اعضا", "can_invite_users": "دعوت کاربران/مدیریت درخواست ورود"}.get(required_permission, required_permission)
+                raise PermissionError(f"برای فعال‌کردن این قابلیت، ربات باید مدیر گروه با مجوز «{friendly}» باشد.")
+            s[setting]=next_enabled; save_data(); add_log("setting_toggled",target,uid,f"{setting}={s[setting]}")
+            label={"smart_security":"امنیت هوشمند گروه","anti_link":"ضد لینک","anti_ads":"ضد تبلیغ","anti_spam":"ضد اسپم","anti_repeat":"ضد پیام تکراری","anti_forward":"ضد فوروارد","media_lock":"قفل رسانه","lock_mentions":"قفل تگ/منشن","lock_hashtags":"قفل هشتگ","lock_usernames":"قفل نام‌کاربری","phone_filter":"فیلتر شماره تماس","lock_photos":"قفل عکس","lock_videos":"قفل فیلم","lock_files":"قفل فایل","lock_stickers":"قفل استیکر و گیف","lock_voice":"قفل پیام صوتی","lock_video_notes":"قفل ویدئوی گرد","welcome_on":"خوشامدگویی","farewell_on":"پیام خداحافظی","join_approval":"تأیید ورود"}.get(setting,setting)
+            bot.send_message(uid,f"✅ {label} برای گروه <code>{target}</code>: {'روشن' if s[setting] else 'خاموش'}")
+        elif action in ("activate_group", "extend_group", "revoke_group"):
+            if action == "activate_group":
+                raise ValueError("برای فعال‌سازی، ربات را مدیر گروه کن و داخل همان گروه بنویس: فعال سازی ۳۰ روز؛ برای دائمی عدد ۰ را بزن.")
+            parts=[x.strip() for x in text.split("|")]
+            target=int(parts[0])
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            licenses=DATA.setdefault("group_licenses", {})
+            if action == "revoke_group":
+                if len(parts) != 1: raise ValueError("فقط شناسه گروه را بفرست.")
+                licenses.pop(str(target), None)
+                add_log("group_license_revoked",target,uid,"لغو مجوز نصب")
+                save_data(); bot.send_message(uid,f"⛔ مجوز گروه <code>{target}</code> لغو شد.")
+            else:
+                if len(parts) != 2: raise ValueError("قالب: شناسه گروه | تعداد روز؛ برای دائمی عدد ۰")
+                days=int(parts[1])
+                if not 0 <= days <= 3650: raise ValueError("تعداد روز باید بین ۰ تا ۳۶۵۰ باشد.")
+                from datetime import timedelta
+                now=datetime.now()
+                old=licenses.get(str(target),{})
+                base=now
+                if action == "extend_group":
+                    try: base=max(now,datetime.strptime(old.get("expires", ""),"%Y-%m-%d %H:%M:%S"))
+                    except Exception: base=now
+                expires="" if days == 0 else (base+timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                licenses[str(target)]={"approved":True,"expires":expires,"activated_by":uid,"updated":now_text()}
+                add_log("group_license_activated" if action=="activate_group" else "group_license_extended",target,uid,f"days={days}")
+                save_data()
+                bot.send_message(uid,f"✅ مجوز گروه <code>{target}</code> فعال شد.\n⭐ پایان مجوز: {esc(expires or 'دائمی')}")
+                # Only a NEW activation sends a confirmation to the group; panel replies stay private.
+                if action == "activate_group":
+                    try:
+                        bot.send_message(
+                            target,
+                            "🛡️ <b>مجوز نصب MASIH GUARD فعال شد!</b>\n"
+                            "━━━━━━━━━━━━━━━━━━\n"
+                            "✅ مجوز این گروه با موفقیت تأیید شد.\n"
+                            f"⭐ پایان اعتبار: {esc(expires or 'دائمی')}\n"
+                            "🌈 اکنون می‌توانید از امکانات ربات استفاده کنید."
+                        )
+                    except Exception as group_notice_error:
+                        print("Group activation notice error:", repr(group_notice_error))
+                        bot.send_message(uid,"⚠️ مجوز ثبت شد، اما پیام گروه ارسال نشد. مطمئن شو ربات داخل گروه است و اجازهٔ ارسال پیام دارد؛ سپس دوباره فعال‌سازی را انجام بده.")
+        elif action=="announcement":
+            if "|" not in text: raise ValueError("قالب: شناسه گروه | متن اطلاعیه")
+            group_text,announcement=text.split("|",1); target=int(group_text.strip()); announcement=announcement.strip()
+            if target>=0 or not announcement: raise ValueError("شناسه گروه منفی و متن اطلاعیه الزامی است.")
+            if not is_group_licensed(target): raise PermissionError("این گروه مجوز فعال ندارد.")
+            bot.send_message(target,"📣 <b>اطلاعیهٔ مدیریت</b>\n━━━━━━━━━━━━━━\n"+esc(announcement[:3500]))
+            add_log("announcement",target,uid,announcement[:150]); save_data(); bot.send_message(uid,"✅ اطلاعیه ارسال شد.")
+        elif action=="add_custom_command":
+            if "|" not in text: raise ValueError("قالب: نام فرمان | متن پاسخ")
+            command,response=[x.strip() for x in text.split("|",1)]
+            if not re.fullmatch(r"[A-Za-z0-9_؀-ۿ-]{1,40}",command) or not response: raise ValueError("نام فرمان یا متن پاسخ معتبر نیست.")
+            get_group_settings(chat_id).setdefault("custom_commands",{})[command.lstrip("!").casefold()]=response[:2000]
+            save_data(); bot.send_message(uid,"✅ فرمان اختصاصی ذخیره شد. در گروه از !نام‌فرمان استفاده کن.")
+        elif action=="delete_custom_command":
+            key=text.lstrip("!").casefold(); existed=get_group_settings(chat_id).setdefault("custom_commands",{}).pop(key,None)
+            save_data(); bot.send_message(uid,"🗑 فرمان حذف شد." if existed is not None else "فرمان پیدا نشد.")
+        elif action in ("add_whitelist", "remove_whitelist"):
+
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target, member=int(parts[0]),int(parts[1])
+            if target >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            s=get_group_settings(target); values=[str(x) for x in s.get("whitelist",[])]
+            if action=="add_whitelist":
+                if str(member) not in values: values.append(str(member))
+                s["whitelist"]=values; result="به فهرست مجاز اضافه شد."
+            else:
+                s["whitelist"]=[x for x in values if x!=str(member)]; result="از فهرست مجاز حذف شد."
+            save_data(); add_log(action,target,uid,str(member)); bot.send_message(uid,"✅ "+result)
+        elif action=="clear_warnings":
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target,member=int(parts[0]),int(parts[1]); DATA["warnings"].pop(f"{target}:{member}",None)
+            save_data(); bot.send_message(uid,"🧹 اخطارهای عضو پاک شد.")
+        elif action=="member_info":
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts)!=2: raise ValueError("قالب: شناسه گروه | شناسه کاربر")
+            target,member=int(parts[0]),int(parts[1])
+            try:
+                cm=bot.get_chat_member(target,member)
+                full_name=" ".join(x for x in [getattr(cm.user,"first_name", ""),getattr(cm.user,"last_name", "")] if x)
+                status_raw=getattr(cm,"status","unknown")
+                status={"creator":"مالک گروه","administrator":"مدیر","member":"عضو","restricted":"محدودشده","left":"خارج‌شده","kicked":"مسدودشده"}.get(status_raw,"نامشخص")
+                warnings=DATA["warnings"].get(f"{target}:{member}",0)
+                bot.send_message(uid,f"🔎 <b>اطلاعات عضو</b>\nنام: {esc(full_name)}\nشناسه: <code>{member}</code>\nوضعیت: {esc(status)}\nاخطارها: {warnings}")
+            except Exception as e: raise ValueError("دریافت اطلاعات عضو ممکن نشد؛ شناسه و دسترسی ربات را بررسی کن.")
+        elif action == "public_font_text":
+            if len(text) > 120: raise ValueError("برای نمایش ۲۰۰ سبک، متن حداکثر ۱۲۰ نویسه باشد.")
+            WAITING[uid]={"action":"public_font_name","font_text":text}
+            bot.send_message(uid,"حالا اسم دلخواهت را برای عنوان خروجی بفرست؛ اگر عنوان نمی‌خواهی، بنویس بدون اسم.")
+            return
+        elif action == "public_font_name":
+            raw=pending.get("font_text", "")
+            label="" if text.casefold() in {"بدون اسم","ندارد","نه"} else text[:50]
+            heading=(f"✨ <b>{esc(label)}</b>\n━━━━━━━━━━━━━━\n" if label else "🔤 <b>۲۰۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n")
+            variants=font_variants(raw)
+            for start in range(0, 200, 10):
+                lines=[]
+                for idx,(name,value) in enumerate(variants[start:start+10], start=start+1):
+                    lines.append(f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>")
+                bot.send_message(uid, (heading if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,200)})</b>\n━━━━━━━━━━━━━━\n") + "\n\n".join(lines))
+        elif action in ("public_font","font"):
+            variants=font_variants(text[:120])
+            for start in range(0,200,10):
+                lines=[f"<b>{idx}. {esc(name)}</b>\n<code>{esc(value)}</code>" for idx,(name,value) in enumerate(variants[start:start+10],start=start+1)]
+                bot.send_message(uid, ("🔤 <b>۲۰۰ سبک فونت رایگان</b>\n━━━━━━━━━━━━━━\n" if start==0 else f"🔤 <b>ادامهٔ فونت‌ها ({start+1} تا {min(start+10,200)})</b>\n━━━━━━━━━━━━━━\n")+"\n\n".join(lines))
+        elif action in ("welcome_text","farewell_text","rules"):
+            s=get_group_settings(chat_id); s[action]=text[:3000]; save_data(); bot.send_message(uid,"✅ ذخیره شد.")
+        elif action=="add_note":
+            if "|" not in text: raise ValueError("قالب: نام کوتاه | متن یادداشت")
+            name, body = [part.strip() for part in text.split("|", 1)]
+            name = re.sub(r"[^\w\u0600-\u06ff-]", "", name.replace("#", "")).strip().lower()[:40]
+            if not name or not body: raise ValueError("نام و متن یادداشت نباید خالی باشد.")
+            notes = get_group_settings(chat_id).setdefault("notes", {})
+            notes[name] = body[:3000]; save_data(); bot.send_message(uid, f"✅ یادداشت #{esc(name)} ذخیره شد. در گروه با #{esc(name)} فراخوانی می‌شود.")
+        elif action=="delete_note":
+            name = re.sub(r"[^\w\u0600-\u06ff-]", "", text.replace("#", "")).strip().lower()[:40]
+            notes = get_group_settings(chat_id).setdefault("notes", {})
+            removed = notes.pop(name, None); save_data()
+            bot.send_message(uid, "🗑 یادداشت حذف شد." if removed is not None else "این یادداشت پیدا نشد.")
+        elif action=="auto_reply":
+            if "|" not in text: bot.send_message(uid,"قالب: کلمه کلیدی | متن پاسخ"); return
+            keyword,reply=[p.strip() for p in text.split("|",1)]
+            if not keyword or not reply: raise ValueError("کلمه کلیدی و پاسخ خالی نباشند.")
+            get_group_settings(chat_id)["auto_replies"][keyword]=reply[:2000]; save_data(); bot.send_message(uid,"✅ پاسخ خودکار ذخیره شد.")
+        elif action=="delete_reply":
+            existed=get_group_settings(chat_id)["auto_replies"].pop(text,None); save_data()
+            bot.send_message(uid,"🗑 پاسخ حذف شد." if existed is not None else "کلمه کلیدی پیدا نشد.")
+        elif action=="bad_word":
+            s=get_group_settings(chat_id)
+            if text not in s["bad_words"]: s["bad_words"].append(text[:100])
+            save_data(); bot.send_message(uid,"✅ کلمه ممنوع ثبت شد.")
+        elif action=="warn_limit":
+            n=int(text)
+            if not 1<=n<=20: raise ValueError("عدد باید بین ۱ تا ۲۰ باشد.")
+            get_group_settings(chat_id)["warn_limit"]=n; save_data(); bot.send_message(uid,"✅ سقف اخطار ذخیره شد.")
+        elif action in ("warn","mute","unmute","ban","unban","kick"):
+            parts=[x.strip() for x in text.split("|")]
+            if len(parts) != 2:
+                raise ValueError("برای امنیت، شناسه گروه و شناسه عضو را با | بفرست. نمونه: -1001234567890 | 123456789")
+            target_chat,target_user=int(parts[0]),int(parts[1])
+            if target_chat >= 0: raise ValueError("شناسه گروه باید منفی باشد.")
+            if not is_owner(uid) and not is_group_admin(target_chat,uid): raise PermissionError("باید مدیر همان گروه باشی.")
+            if not is_group_licensed(target_chat): raise PermissionError("این گروه مجوز فعال ندارد.")
+            bot.send_message(uid,moderate_member(action,target_chat,target_user))
+        elif action=="add_proxy":
+            if not (text.startswith("https://t.me/proxy?") or text.startswith("http://t.me/proxy?") or text.startswith("tg://proxy?")):
+                raise ValueError("لینک معتبر t.me/proxy یا tg://proxy وارد کن.")
+            if not proxy_endpoint(text): raise ValueError("این لینک سرور یا پورت معتبر ندارد؛ لینک کامل پروکسی را بفرست.")
+            if text in DATA["proxies"]: bot.send_message(uid,"این پروکسی قبلاً ثبت شده است.")
+            elif len(DATA["proxies"]) >= 20: raise ValueError("حداکثر ۲۰ پروکسی می‌توان ذخیره کرد؛ ابتدا یکی را حذف کن.")
+            else:
+                DATA["proxies"].append(text); save_data(); add_log("proxy_added","",uid,"پروکسی ثبت شد")
+                ping=proxy_ping_ms(text)
+                bot.send_message(uid,"✅ پروکسی ذخیره شد.\n"+(f"🟢 پاسخ سرور: {ping} ms (آزمایش اتصال TCP)" if ping is not None else "⚠️ اتصال به سرور در حال حاضر برقرار نشد؛ لینک ذخیره شده ولی ممکن است آفلاین باشد."))
+        elif action=="delete_proxy":
+            i=int(text)-1
+            if not 0<=i<len(DATA["proxies"]): raise ValueError("شماره پروکسی معتبر نیست.")
+            removed=DATA["proxies"].pop(i); save_data(); add_log("proxy_deleted","",uid,removed); bot.send_message(uid,"🗑 پروکسی حذف شد.")
+        elif action=="add_customer":
+            parts=[p.strip() for p in text.split("|",2)]
+            if len(parts)<2: raise ValueError("قالب: شناسه | نام | توضیحات")
+            DATA["customers"][parts[0]]={"name":parts[1],"details":parts[2] if len(parts)>2 else "","created":now_text()}
+            save_data(); bot.send_message(uid,"✅ مشتری ثبت شد.")
+        elif action=="find_customer":
+            c=DATA["customers"].get(text)
+            bot.send_message(uid,(f"💼 <b>{esc(c['name'])}</b>\nشناسه: <code>{esc(text)}</code>\nتوضیحات: {esc(c.get('details',''))}") if c else "مشتری پیدا نشد.")
+        elif action=="ticket":
+            tid=create_ticket(uid,message.from_user.username,text); bot.send_message(uid,f"🎫 تیکت ثبت شد. شناسه: <code>{tid}</code>")
+        elif action=="ai":
+            status=bot.send_message(uid,"🧠 در حال دریافت پاسخ...")
+            answer=ask_ai(text)
+            try: bot.edit_message_text(esc(answer[:3900]),uid,status.message_id)
+            except Exception: bot.send_message(uid,esc(answer[:3900]))
+        elif action in {"game:guess", "game:round"}:
+            game=GAMES.get(uid)
+            if game is None: raise ValueError("بازی فعالی نیست؛ دوباره بنویس «بازی».")
+            kind=game.get("kind", "number") if isinstance(game,dict) else "number"
+            answer=game.get("answer") if isinstance(game,dict) else game
+            won=False; detail=""
+            if kind=="number":
+                guess=int(text); maximum=int(answer)
+                if not 1<=guess<=maximum: raise ValueError(f"عدد باید بین ۱ تا {maximum} باشد.")
+                won=guess==answer; detail=f"عدد درست {answer} بود."
+            elif kind=="riddle":
+                won="سایه" in text.replace("‌", " ").strip(); detail="جواب معما «سایه» بود."
+            elif kind=="rps":
+                guess=text.strip()
+                if guess not in {"سنگ","کاغذ","قیچی"}: raise ValueError("فقط سنگ، کاغذ یا قیچی بنویس.")
+                bot_choice=answer
+                won=guess==bot_choice or (guess,bot_choice) in {("سنگ","قیچی"),("قیچی","کاغذ"),("کاغذ","سنگ")}
+                detail=f"انتخاب ربات: {bot_choice}."
+            elif kind=="math":
+                try: won=int(text)==int(answer)
+                except ValueError: won=False
+                detail=f"جواب درست {answer} بود."
+            elif kind=="word":
+                won=text.strip().startswith("م") and len(text.strip())>1; detail="باید یک کلمه با حرف «م» می‌فرستادی."
+            if won:
+                DATA["points"][str(uid)]=DATA["points"].get(str(uid),0)+1; save_data()
+                bot.send_message(uid,f"🎉 آفرین! این دور را بردی و یک امتیاز گرفتی.\n{detail}")
+            else: bot.send_message(uid,f"🙂 این دور را نبردی. {detail}")
+            GAMES.pop(uid,None)
+        elif action.startswith("show_"): handle_show(uid,action[5:])
+        else:
+            WAITING.pop(uid,None)
+            bot.send_message(uid,"⚠️ این گزینه به این نسخه متصل نشده است. پنل را از /panel باز کن و اگر تکرار شد، نام همان دکمه را برای اصلاح بفرست.")
+            return
+        WAITING.pop(uid,None)
+    except (ValueError,TypeError,PermissionError) as e:
+        bot.send_message(uid,"⚠️ ورودی یا دسترسی معتبر نیست.\n"+esc(str(e)))
+    except Exception as e:
+        print("Private action error:",repr(e)); bot.send_message(uid,"⚠️ عملیات ناموفق بود؛ دسترسی ربات و اطلاعات واردشده را بررسی کن.")
+
+# ---------------- Expanded group utilities and moderation commands ----------------
+def _feature_admin(message):
+    """Fail-closed admin check for commands that change a group."""
+    uid = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+    if getattr(getattr(message, "chat", None), "type", "") not in ("group", "supergroup"):
+        safe_reply_to(message, "این دستور را داخل گروه اجرا کن.")
+        return False
+    if not is_group_admin(message.chat.id, uid):
+        safe_reply_to(message, "⛔ این دستور فقط برای مدیران همان گروه است.")
+        return False
+    if not bot_has_group_permission(message.chat.id, "can_delete_messages"):
+        # Non-destructive commands are still allowed; permission-specific checks happen below.
+        pass
+    return True
+
+
+def _feature_reply_target(message):
+    reply = getattr(message, "reply_to_message", None)
+    user = getattr(reply, "from_user", None) if reply else None
+    if not user or getattr(user, "is_bot", False):
+        return None
+    return user
+
+
+@bot.message_handler(commands=[
+    "time", "date", "echo", "groupinfo", "members", "admins", "link", "newlink",
+    "myrank", "invitecount", "activity", "settings", "ruleset", "uptime", "chatid",
+    "userid", "botinfo", "whois", "delete", "pin", "unpin", "mute", "unmute",
+    "kick", "ban", "unban", "warn", "cleanlast", "scanfile", "exportstats", "rules",
+    "stats24", "topactive", "filteradd", "filterdel", "filterlist", "noteadd", "notedel",
+    "note", "setwelcome", "setfarewell", "welcomeon", "welcomeoff", "farewellon", "farewelloff",
+    "quieton", "quietoff", "setquiet", "autoreplyadd", "autoreplydel"
+])
+def expanded_feature_commands(message):
+    """Practical group commands; all state-changing actions check permissions first."""
+    try:
+        raw = (getattr(message, "text", "") or "").strip()
+        parts = raw.split(maxsplit=1)
+        command = parts[0].split("@", 1)[0].lstrip("/").casefold()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        chat = message.chat
+        uid = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+        group_chat = getattr(chat, "type", "") in ("group", "supergroup")
+
+        if command == "time":
+            safe_reply_to(message, "🕒 <b>ساعت محلی ربات</b>\n" + esc(local_now().strftime("%H:%M:%S")) + f"\nمنطقهٔ زمانی: {esc(TIMEZONE_NAME)}")
+        elif command == "date":
+            dt = local_now()
+            safe_reply_to(message, "📅 <b>تاریخ</b>\n" + esc(dt.strftime("%Y-%m-%d")) + "\n" + esc(dt.strftime("%A")))
+        elif command == "echo":
+            if not arg:
+                safe_reply_to(message, "قالب: /echo متن")
+            elif len(arg) > 1000:
+                safe_reply_to(message, "حداکثر طول متن اکو ۱۰۰۰ نویسه است.")
+            else:
+                safe_reply_to(message, "🔊 " + esc(arg))
+        elif command == "chatid":
+            safe_reply_to(message, f"🆔 شناسهٔ گفتگو: <code>{chat.id}</code>")
+        elif command == "userid":
+            target = _feature_reply_target(message)
+            target_id = target.id if target else uid
+            safe_reply_to(message, f"🆔 شناسهٔ کاربر: <code>{target_id}</code>")
+        elif command == "uptime":
+            seconds = max(0, int(time.time() - STARTED_AT))
+            days, rem = divmod(seconds, 86400); hours, rem = divmod(rem, 3600); minutes, secs = divmod(rem, 60)
+            safe_reply_to(message, f"⏱ مدت فعالیت این اجرا: {days} روز، {hours} ساعت، {minutes} دقیقه و {secs} ثانیه")
+        elif command == "botinfo":
+            safe_reply_to(message, f"🛡️ <b>{esc(BRAND)}</b>\nنسخه: {esc(VERSION)}\nوضعیت: پاسخ‌گو\nهوش مصنوعی: {'تنظیم شده' if AI_API_KEY else 'نیازمند تنظیم کلید'}")
+        elif command == "groupinfo":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            try: count = bot.get_chat_member_count(chat.id)
+            except Exception: count = "نامشخص"
+            cfg = get_group_settings(chat.id)
+            licensed = "فعال" if is_group_licensed(chat.id) else "غیرفعال"
+            safe_reply_to(message, f"📋 <b>اطلاعات گروه</b>\nنام: {esc(getattr(chat, 'title', 'گروه'))}\nشناسه: <code>{chat.id}</code>\nاعضا: {esc(count)}\nمجوز ربات: {licensed}\nضدلینک: {'روشن' if cfg.get('anti_link') else 'خاموش'}\nضداسپم: {'روشن' if cfg.get('anti_spam') else 'خاموش'}")
+        elif command == "members":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            try: count = bot.get_chat_member_count(chat.id)
+            except Exception: count = "تلگرام تعداد را برنگرداند"
+            safe_reply_to(message, f"👥 تعداد اعضای گروه: <b>{esc(count)}</b>")
+        elif command == "admins":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            admins = bot.get_chat_administrators(chat.id)
+            rows = []
+            for item in admins[:50]:
+                u = item.user
+                name = (getattr(u, "first_name", "") or "") + (" @" + u.username if getattr(u, "username", None) else "")
+                rows.append("• " + esc(name or str(u.id)) + f" — <code>{u.id}</code>")
+            safe_reply_to(message, "👑 <b>مدیران گروه</b>\n" + ("\n".join(rows) if rows else "فهرست خالی است."))
+        elif command == "link":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            if not _feature_admin(message): return
+            try:
+                current_chat = bot.get_chat(chat.id)
+                link = getattr(current_chat, "invite_link", None)
+            except Exception:
+                link = None
+            if not link:
+                safe_reply_to(message, "⚠️ لینک اصلی در دسترس نیست؛ مدیر گروه می‌تواند /newlink را اجرا کند.")
+                return
+            safe_reply_to(message, "🔗 لینک دعوت گروه:\n" + esc(link))
+        elif command == "newlink":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            if not _feature_admin(message): return
+            link = bot.export_chat_invite_link(chat.id)
+            add_log("group_invite_link_refreshed", chat.id, uid, "لینک اصلی دعوت تازه‌سازی شد")
+            safe_reply_to(message, "♻️ لینک اصلی دعوت تازه شد. اگر لینک قبلی لینک اصلی گروه بوده، دیگر معتبر نیست:\n" + esc(link))
+        elif command == "myrank":
+            target = _feature_reply_target(message)
+            target_id = target.id if target else uid
+            try:
+                member = bot.get_chat_member(chat.id, target_id)
+                status_map = {"creator": "مالک گروه", "administrator": "مدیر", "member": "عضو", "restricted": "محدودشده", "left": "خارج‌شده", "kicked": "مسدود"}
+                status = status_map.get(getattr(member, "status", ""), getattr(member, "status", "نامشخص"))
+                name = getattr(target, "first_name", "کاربر") if target else getattr(getattr(message, "from_user", None), "first_name", "کاربر")
+                safe_reply_to(message, f"👤 {esc(name)}\nشناسه: <code>{target_id}</code>\nمقام در گروه: <b>{esc(status)}</b>")
+            except Exception:
+                safe_reply_to(message, "⚠️ نتوانستم مقام این کاربر را از تلگرام دریافت کنم.")
+        elif command == "invitecount":
+            target = _feature_reply_target(message)
+            target_id = target.id if target else uid
+            cfg = get_group_settings(chat.id) if group_chat else {}
+            credits = cfg.get("force_add_credits", {}) if isinstance(cfg, dict) else {}
+            count = int(credits.get(str(target_id), DATA.setdefault("force_add_credits", {}).get(str(target_id), 0)) or 0)
+            safe_reply_to(message, f"➕ دعوت‌های ثبت‌شده برای <code>{target_id}</code>: <b>{count}</b>\nاین عدد فقط دعوت‌هایی را نشان می‌دهد که سامانهٔ دعوت ربات ثبت کرده است.")
+        elif command == "activity":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            key = str(chat.id); now = time.time()
+            rows = DATA.setdefault("message_history", {}).get(key, [])
+            recent = [r for r in rows if now - float(r.get("time", 0) or 0) <= 86400]
+            by_user = {}
+            for r in recent:
+                u = str(r.get("user_id", 0)); by_user[u] = by_user.get(u, 0) + 1
+            top = sorted(by_user.items(), key=lambda x: x[1], reverse=True)[:10]
+            lines = [f"• <code>{u}</code> — {n} پیام" for u, n in top]
+            safe_reply_to(message, f"📊 <b>فعالیت ثبت‌شدهٔ ۲۴ ساعت اخیر</b>\nپیام‌های ثبت‌شده: {len(recent)}\nکاربران فعال در داده‌های موجود: {len(by_user)}\n" + ("\n".join(lines) if lines else "هنوز دادهٔ کافی ثبت نشده است.") + "\n⚠️ این گزارش فقط از تاریخچهٔ ذخیره‌شدهٔ ربات استفاده می‌کند و ممکن است کامل نباشد.")
+        elif command == "settings":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            cfg = get_group_settings(chat.id)
+            labels = {"anti_link":"قفل لینک", "anti_ads":"ضدتبلیغ", "anti_tapchi":"قفل تبچی", "anti_spam":"ضداسپم", "anti_repeat":"ضدتکرار", "anti_forward":"ضدفوروارد", "media_lock":"قفل رسانه", "lock_photos":"قفل عکس", "lock_videos":"قفل ویدئو", "lock_files":"قفل فایل", "lock_stickers":"قفل استیکر", "lock_voice":"قفل ویس", "force_join_on":"جوین اجباری", "force_add_on":"اد اجباری", "welcome_on":"خوشامدگویی", "captcha_on":"کپچا"}
+            body = "\n".join(f"• {label}: {'روشن' if cfg.get(key) else 'خاموش'}" for key, label in labels.items())
+            safe_reply_to(message, "⚙️ <b>تنظیمات فعلی گروه</b>\n" + body)
+        elif command == "rules":
+            cfg = get_group_settings(chat.id) if group_chat else {}
+            safe_reply_to(message, "📜 <b>قوانین گروه</b>\n" + esc(cfg.get("rules", "قوانینی ثبت نشده است.")))
+        elif command == "ruleset":
+            if not group_chat or not _feature_admin(message): return
+            if not arg:
+                safe_reply_to(message, "قالب: /ruleset متن قوانین"); return
+            cfg = get_group_settings(chat.id); cfg["rules"] = arg[:3500]; save_data()
+            add_log("group_rules_updated", chat.id, uid, "قوانین گروه به‌روزرسانی شد")
+            safe_reply_to(message, "✅ قوانین گروه ذخیره شد.")
+        elif command == "whois":
+            target = _feature_reply_target(message)
+            if not target:
+                safe_reply_to(message, "برای استفاده از /whois روی پیام کاربر ریپلای کن."); return
+            try: member = bot.get_chat_member(chat.id, target.id); status = getattr(member, "status", "نامشخص")
+            except Exception: status = "نامشخص"
+            safe_reply_to(message, f"👤 <b>اطلاعات کاربر</b>\nنام: {esc(getattr(target, 'first_name', ''))}\nنام خانوادگی: {esc(getattr(target, 'last_name', ''))}\nنام کاربری: @{esc(getattr(target, 'username', '') or 'ندارد')}\nشناسه: <code>{target.id}</code>\nوضعیت تلگرام: {esc(status)}")
+        elif command in ("delete", "pin", "unpin"):
+            if not group_chat or not _feature_admin(message): return
+            reply = getattr(message, "reply_to_message", None)
+            if command == "delete":
+                if not reply: safe_reply_to(message, "برای حذف، روی پیام موردنظر ریپلای کن."); return
+                bot.delete_message(chat.id, reply.message_id); safe_reply_to(message, "🗑 پیام حذف شد.")
+            elif command == "pin":
+                if not reply: safe_reply_to(message, "برای سنجاق، روی پیام موردنظر ریپلای کن."); return
+                bot.pin_chat_message(chat.id, reply.message_id, disable_notification=True); safe_reply_to(message, "📌 پیام سنجاق شد.")
+            else:
+                bot.unpin_chat_message(chat.id); safe_reply_to(message, "📌 سنجاق پیام برداشته شد.")
+        elif command in ("mute", "unmute", "kick", "ban", "unban", "warn"):
+            if not group_chat or not _feature_admin(message): return
+            target = _feature_reply_target(message)
+            target_id = target.id if target else None
+            if not target_id and command == "unban" and arg.isdigit(): target_id = int(arg)
+            if not target_id:
+                safe_reply_to(message, "برای این دستور روی پیام کاربر ریپلای کن؛ برای /unban می‌توانی شناسه بدهی."); return
+            action = "warn" if command == "warn" else command
+            result = moderate_member(action, chat.id, target_id)
+            safe_reply_to(message, esc(result))
+        elif command == "cleanlast":
+            if not group_chat or not _feature_admin(message): return
+            try: amount = int(arg or "20")
+            except ValueError: amount = 0
+            if not 1 <= amount <= 100:
+                safe_reply_to(message, "تعداد باید بین ۱ تا ۱۰۰ باشد."); return
+            rows = DATA.setdefault("message_history", {}).get(str(chat.id), [])[-amount:]
+            deleted = 0
+            for row in reversed(rows):
+                try: bot.delete_message(chat.id, int(row["message_id"])); deleted += 1
+                except Exception: pass
+            safe_reply_to(message, f"🧹 {deleted} پیام از تاریخچهٔ در دسترس حذف شد.")
+            add_log("messages_cleaned", chat.id, uid, str(deleted))
+        elif command == "exportstats":
+            if not group_chat or not _feature_admin(message): return
+            key = str(chat.id)
+            payload = {"group_id": chat.id, "group_title": getattr(chat, "title", ""), "generated_at": now_text(), "group_stats": DATA.setdefault("group_stats", {}).get(key, {}), "recent_message_history": DATA.setdefault("message_history", {}).get(key, [])[-300:]}
+            f = io.BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")); f.name = "group_report.json"
+            bot.send_document(chat.id, f, caption="📊 گزارش قابل‌دانلود گروه (شامل شناسه‌های پیام/کاربر در تاریخچهٔ موجود)")
+        elif command in ("stats24", "topactive"):
+            # Alias to the bounded 24-hour activity report; history completeness is explicitly disclosed.
+            rows = DATA.setdefault("message_history", {}).get(str(chat.id), []) if group_chat else []
+            now = time.time(); counts = {}
+            for row in rows:
+                if now - float(row.get("time", 0) or 0) <= 86400:
+                    key = str(row.get("user_id", 0)); counts[key] = counts.get(key, 0) + 1
+            ordered = sorted(counts.items(), key=lambda item: item[1], reverse=True)[:10]
+            summary = "\n".join(f"{i}. <code>{esc(user_id)}</code> — {count} پیام" for i, (user_id, count) in enumerate(ordered, 1))
+            safe_reply_to(message, "📊 <b>فعال‌ترین کاربران در داده‌های ثبت‌شدهٔ ۲۴ ساعت اخیر</b>\n" + (summary or "داده‌ای برای نمایش وجود ندارد.") + "\n⚠️ این فهرست بر اساس تاریخچهٔ محدود ربات است، نه آمار کامل تلگرام.")
+        elif command == "filterlist":
+            cfg = get_group_settings(chat.id) if group_chat else {}
+            words = cfg.get("bad_words", [])
+            safe_reply_to(message, "🚫 <b>کلمات فیلترشده</b>\n" + ("\n".join("• " + esc(w) for w in words[:100]) if words else "فهرست خالی است."))
+        elif command in ("filteradd", "filterdel"):
+            if not group_chat or not _feature_admin(message): return
+            if not arg or len(arg) > 100:
+                safe_reply_to(message, f"قالب: /{command} کلمه یا عبارت (حداکثر ۱۰۰ نویسه)"); return
+            cfg = get_group_settings(chat.id); words = cfg.setdefault("bad_words", [])
+            if command == "filteradd":
+                if arg.casefold() not in [str(w).casefold() for w in words]: words.append(arg)
+                action = "added"
+                response = "✅ عبارت به فهرست فیلتر اضافه شد."
+            else:
+                old = len(words); words[:] = [w for w in words if str(w).casefold() != arg.casefold()]
+                action = "removed"; response = "✅ عبارت از فهرست فیلتر حذف شد." if len(words) < old else "ℹ️ این عبارت در فهرست نبود."
+            save_data(); add_log("group_filter_" + action, chat.id, uid, arg[:100]); safe_reply_to(message, response)
+        elif command == "noteadd":
+            if not group_chat or not _feature_admin(message): return
+            if "|" not in arg:
+                safe_reply_to(message, "قالب: /noteadd نام | متن یادداشت"); return
+            name, value = [x.strip() for x in arg.split("|", 1)]
+            if not re.fullmatch(r"[\w\u0600-\u06ff-]{1,40}", name) or not value:
+                safe_reply_to(message, "نام باید ۱ تا ۴۰ نویسه باشد و متن یادداشت خالی نباشد."); return
+            get_group_settings(chat.id).setdefault("notes", {})[name.lower()] = value[:2000]
+            save_data(); safe_reply_to(message, "✅ یادداشت ذخیره شد؛ با #نام می‌توان آن را فراخوانی کرد.")
+        elif command == "notedel":
+            if not group_chat or not _feature_admin(message): return
+            name = arg.casefold().lstrip("#")
+            notes = get_group_settings(chat.id).setdefault("notes", {})
+            existed = notes.pop(name, None); save_data()
+            safe_reply_to(message, "✅ یادداشت حذف شد." if existed is not None else "ℹ️ یادداشتی با این نام پیدا نشد.")
+        elif command == "note":
+            if not group_chat:
+                safe_reply_to(message, "این دستور را داخل گروه اجرا کن."); return
+            name = arg.casefold().lstrip("#")
+            notes = get_group_settings(chat.id).setdefault("notes", {})
+            if name:
+                value = notes.get(name)
+                safe_reply_to(message, "📝 <b>یادداشت</b>\n" + esc(value) if value is not None else "یادداشت پیدا نشد.")
+            else:
+                safe_reply_to(message, "📝 <b>یادداشت‌های گروه</b>\n" + ("\n".join("• #" + esc(k) for k in list(notes)[:100]) or "یادداشتی ثبت نشده است."))
+        elif command in ("setwelcome", "setfarewell"):
+            if not group_chat or not _feature_admin(message): return
+            if not arg or len(arg) > 1000:
+                safe_reply_to(message, f"قالب: /{command} متن (برای نام عضو از {{name}} استفاده کن؛ حداکثر ۱۰۰۰ نویسه)"); return
+            key = "welcome_text" if command == "setwelcome" else "farewell_text"
+            get_group_settings(chat.id)[key] = arg
+            save_data(); add_log("group_" + key + "_updated", chat.id, uid, "متن پیام گروه تغییر کرد")
+            safe_reply_to(message, "✅ متن پیام ذخیره شد.")
+        elif command in ("welcomeon", "welcomeoff", "farewellon", "farewelloff"):
+            if not group_chat or not _feature_admin(message): return
+            key = "welcome_on" if command.startswith("welcome") else "farewell_on"
+            enabled = command.endswith("on")
+            get_group_settings(chat.id)[key] = enabled; save_data()
+            safe_reply_to(message, f"✅ {'خوشامدگویی' if key == 'welcome_on' else 'پیام خداحافظی'} {'روشن' if enabled else 'خاموش'} شد.")
+        elif command in ("quieton", "quietoff", "setquiet"):
+            if not group_chat or not _feature_admin(message): return
+            cfg = get_group_settings(chat.id)
+            if command == "quietoff":
+                cfg["quiet_hours_on"] = False; save_data(); safe_reply_to(message, "✅ سکوت زمان‌بندی‌شده خاموش شد."); return
+            if command == "quieton":
+                cfg["quiet_hours_on"] = True; save_data(); safe_reply_to(message, f"🌙 سکوت زمان‌بندی‌شده روشن شد: {esc(cfg.get('quiet_start','23:00'))} تا {esc(cfg.get('quiet_end','07:00'))}"); return
+            match = re.fullmatch(r"(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})", arg)
+            if not match:
+                safe_reply_to(message, "قالب: /setquiet 23:00-07:00"); return
+            try:
+                start_t = datetime.strptime(match.group(1), "%H:%M").time(); end_t = datetime.strptime(match.group(2), "%H:%M").time()
+            except ValueError:
+                safe_reply_to(message, "ساعت معتبر نیست؛ از قالب ۲۴ ساعته HH:MM استفاده کن."); return
+            cfg.update({"quiet_start": start_t.strftime("%H:%M"), "quiet_end": end_t.strftime("%H:%M"), "quiet_hours_on": True})
+            save_data(); safe_reply_to(message, "✅ بازهٔ سکوت ذخیره و فعال شد.")
+        elif command in ("autoreplyadd", "autoreplydel"):
+            if not group_chat or not _feature_admin(message): return
+            if command == "autoreplyadd":
+                if "|" not in arg:
+                    safe_reply_to(message, "قالب: /autoreplyadd کلمه کلیدی | متن پاسخ"); return
+                keyword, response = [x.strip() for x in arg.split("|", 1)]
+                if not keyword or not response:
+                    safe_reply_to(message, "کلمهٔ کلیدی و متن پاسخ هر دو لازم‌اند."); return
+                get_group_settings(chat.id).setdefault("auto_replies", {})[keyword[:80]] = response[:1500]
+                save_data(); safe_reply_to(message, "✅ پاسخ خودکار ثبت شد.")
+            else:
+                keyword = arg.strip()
+                replies = get_group_settings(chat.id).setdefault("auto_replies", {})
+                existed = replies.pop(keyword, None); save_data()
+                safe_reply_to(message, "✅ پاسخ خودکار حذف شد." if existed is not None else "ℹ️ کلمهٔ کلیدی پیدا نشد.")
+        elif command == "scanfile":
+            reply = getattr(message, "reply_to_message", None)
+            doc = getattr(reply, "document", None) if reply else None
+            if not doc:
+                safe_reply_to(message, "برای بررسی فایل، روی پیام حاوی فایل ریپلای کن و /scanfile بزن."); return
+            if int(getattr(doc, "file_size", 0) or 0) > 15 * 1024 * 1024:
+                safe_reply_to(message, "فایل بزرگ‌تر از ۱۵ مگابایت است؛ در این نسخه بررسی محلی انجام نمی‌شود."); return
+            file_info = bot.get_file(doc.file_id)
+            raw_bytes = bot.download_file(file_info.file_path)
+            import hashlib
+            digest = hashlib.sha256(raw_bytes).hexdigest()
+            safe_reply_to(message, f"🔎 <b>گزارش بررسی فایل</b>\nنام: {esc(getattr(doc, 'file_name', 'بدون نام'))}\nحجم: {len(raw_bytes):,} بایت\nSHA-256: <code>{digest}</code>\n⚠️ این فقط شناسایی نوع/هش فایل است و اسکن ضدبدافزار نیست؛ از این گزارش نمی‌توان سالم‌بودن فایل را نتیجه گرفت.")
+    except Exception as exc:
+        print("Expanded feature command error:", repr(exc))
+        try: safe_reply_to(message, "⚠️ اجرای دستور کامل نشد. دسترسی‌های ربات و گزارش خطا را بررسی کن.")
+        except Exception: pass
+
+
+# Register the group text router after command handlers so /start and /ping keep priority.
+bot.message_handler(content_types=["text"], func=lambda m: getattr(getattr(m, "chat", None), "type", "") in ("group", "supergroup"))(group_message_handler)
+
+
+# ---------------- Embedded browser game (kept in this single main.py file) ----------------
+GAME_HTML = r"""<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#07111c">
+<title>آرکید مسیح هکرینگ | ۵۰ بازی</title>
+<style>
+:root{--bg:#06101b;--panel:rgba(7,20,34,.92);--line:#49dfe4;--gold:#ffd166;--text:#effaff;--muted:#b8d0dc}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Tahoma,Arial,sans-serif;touch-action:manipulation}body{background:radial-gradient(ellipse at top,#14334a 0,#07111c 55%,#03070d 100%)}#game{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}.hud{position:fixed;inset:0;pointer-events:none;padding:calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 10px)}.top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.brand,.stats,.mission,.toast,.card{background:var(--panel);border:1px solid #49dfe455;box-shadow:0 8px 30px #0005;backdrop-filter:blur(12px);border-radius:14px}.brand{padding:10px 12px;color:#7ff9ee;font-weight:900;font-size:12px}.stats{padding:8px 10px;font-size:12px;line-height:1.8;min-width:108px}.mission{position:absolute;top:90px;left:10px;width:min(300px,76vw);padding:11px 12px;border-color:#ffd16666}.mission b{display:block;color:var(--gold);font-size:13px;margin-bottom:5px}.mission p{font-size:12px;line-height:1.8;color:#d4e5ec;margin:0}.bar{height:5px;background:#21303b;border-radius:9px;overflow:hidden;margin-top:8px}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,#45f1dd,#ffd166);transition:width .2s}.controls{position:fixed;inset:auto 0 0;height:150px;pointer-events:none}.pad{position:absolute;bottom:16px;left:14px;display:grid;grid-template-columns:52px 52px 52px;grid-template-rows:52px 52px;gap:4px;pointer-events:auto;direction:ltr}.ctrl,.act{border:1px solid #74f5ec88;color:#efffff;background:linear-gradient(145deg,#15516aee,#0a2338ee);border-radius:14px;font-weight:900;font-size:18px;touch-action:manipulation;box-shadow:0 5px 18px #0006}.pad .up{grid-column:2;grid-row:1}.pad .left{grid-column:1;grid-row:2}.pad .down{grid-column:2;grid-row:2}.pad .right{grid-column:3;grid-row:2}.actions{position:absolute;right:14px;bottom:20px;display:flex;flex-direction:column;gap:8px;pointer-events:auto}.act{width:62px;height:54px;font-size:12px;border-color:#ffd16688;background:linear-gradient(145deg,#7b5b20ee,#35270fee)}.toast{position:fixed;left:50%;bottom:160px;transform:translateX(-50%);padding:10px 14px;max-width:90vw;font-size:13px;text-align:center;display:none;pointer-events:none}.toast.show{display:block}.screen{position:fixed;inset:0;display:grid;place-items:center;padding:18px;background:linear-gradient(180deg,#02081188,#020811dd);z-index:5}.card{width:min(480px,100%);padding:22px;text-align:center;border-color:#49dfe488}.logo{font-size:38px}.card h1{color:#7ff9ee;font-size:23px;margin:8px 0}.card p{font-size:13px;line-height:2;color:#c8dce6}.primary,.secondary{font-family:inherit;font-weight:900;border-radius:12px;padding:13px 18px;min-height:46px;cursor:pointer}.primary{border:0;color:#03141b;background:linear-gradient(110deg,#55f3df,#3bb7ed)}.secondary{border:1px solid #49dfe466;color:#e8fbff;background:#0b2033;margin-right:6px}.row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}.hidden{display:none!important}.footer{font-size:10px;color:#8caab8;margin-top:14px}@media(max-width:430px){.mission{top:90px;width:66vw}.stats{font-size:11px;min-width:92px}.pad{grid-template-columns:45px 45px 45px;grid-template-rows:45px 45px}.act{width:56px;height:49px}.brand{font-size:11px;padding:9px}}
+</style></head><body>
+<canvas id="game" aria-label="محیط بازی"></canvas>
+<div class="hud"><div class="top"><div class="brand">✦ مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈</div><div class="stats">⭐ امتیاز: <b id="score">۰</b><br>💎 نشان: <b id="gems">۰</b><br>❤️ فرصت: <b id="lives">۳</b></div></div><div class="mission"><b id="missionTitle">آرکید مسیح هکرینگ</b><p id="missionText">یک بازی را شروع کن.</p><div class="bar"><span id="progress"></span></div></div></div>
+<div class="controls" id="controls"><div class="pad"><button class="ctrl up" data-key="up" aria-label="بالا">▲</button><button class="ctrl left" data-key="left" aria-label="چپ">◀</button><button class="ctrl down" data-key="down" aria-label="پایین">▼</button><button class="ctrl right" data-key="right" aria-label="راست">▶</button></div><div class="actions"><button class="act" id="action">پرش / انتخاب</button><button class="act" id="pause">توقف</button></div></div><div class="toast" id="toast"></div>
+<div class="screen" id="intro"><div class="card"><div class="logo" id="emoji">🎮</div><h1 id="introTitle">آرکید مسیح هکرینگ</h1><p id="introText">۵۰ بازی با قوانین متفاوت، کنترل لمسی و صفحه‌کلید. برای شروع دکمه را بزن.</p><div class="row"><button class="primary" id="start">شروع بازی</button><button class="secondary" id="help">راهنمای بازی</button></div><div class="footer">بدون نصب و بدون نیاز به بارگذاری کتابخانهٔ خارجی</div></div></div>
+<div class="screen hidden" id="result"><div class="card"><div class="logo" id="resultEmoji">🏆</div><h1 id="resultTitle">آفرین!</h1><p id="resultText"></p><div class="row"><button class="primary" id="again">دوباره بازی کن</button><button class="secondary" id="menu">بازگشت</button></div></div></div>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id),canvas=$('game'),ctx=canvas.getContext('2d');
+const titles=['مسابقه ماشین نئونی','مسابقه موتور کارتونی','مسابقه جمع‌آوری ستاره‌ها','پیچ‌های نئونی','مسابقه جت فضایی','مسیر قطار رنگی','پرش سکویی کارتونی','مسابقه قایق','مسیر امتیاز نئونی','مسیر پر از تله','پرش روی سکوهای کارتونی','برج بی‌نهایت','هزارتوی رنگی','غار اسرارآمیز','گنج‌یابی','پرش روی سکوهای متحرک','آبشار جادویی','ماجراجویی در جنگل','پل‌های شناور جادویی','فرار از معبد باستانی','کاوش فضایی','حفاظت از پایگاه ربات‌ها','جمع‌آوری ستاره‌ها در موج‌ها','ربات‌های دوستانه','شکار کریستال','کاوش سیاره','ساخت برج نور','چالش غول کاغذی','مسیر پازل نورها','مأموریت مخفی','حل معمای لیزر','جورچین رنگ‌ها','هزارتوی زمان‌دار','پیدا کردن اشیای مخفی','رمزگشایی','حافظه تصویری','چالش واکنش سریع','رکورد پرش کارتونی','ساخت مسیر','فرار از اتاق','فوتبال پنالتی','بسکتبال امتیازی','بولینگ','پینگ‌پنگ','بیلیارد','پیدا کردن ستاره‌های رنگی','پرتاب به سبد','عبور از دروازه‌های نوری','تعادل توپ','آرکید ترکیبی رکوردشکنی'];
+const qs=new URLSearchParams(location.search);let mode=Number.parseInt(qs.get('mode')||'1',10);if(!Number.isFinite(mode)||mode<1||mode>50)mode=1;const name=(qs.get('name')||titles[mode-1]).slice(0,80);const family=Math.floor((mode-1)/10),variant=(mode-1)%10;document.title=name+' | آرکید مسیح هکرینگ';
+let W=innerWidth,H=innerHeight,dpr=1,raf=0,last=0,started=false,paused=false,ended=false,score=0,gems=0,lives=3,time=0,progress=0,toastTimer=0;
+let keys={left:false,right:false,up:false,down:false,action:false},objects=[],particles=[],player={},world={},puzzle={hitboxes:{},picked:[],path:[],seq:[],revealed:[],board:[],input:[],pos:8,target:0},pointer={x:0,y:0,down:false};
+const colors=['#52f5e4','#ffd166','#ff72b6','#b69cff','#78f59d','#69aaff'];
+function resize(){W=innerWidth;H=innerHeight;dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.floor(W*dpr);canvas.height=Math.floor(H*dpr);canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
+function txt(s,x,y,size=16,color='#effaff',align='center'){ctx.font=`900 ${size}px Tahoma,Arial`;ctx.textAlign=align;ctx.textBaseline='middle';ctx.fillStyle=color;ctx.fillText(s,x,y)}
+function rounded(x,y,w,h,r,color,stroke){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fillStyle=color;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}}
+function toast(s){$('toast').textContent=s;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1800)}
+function hud(){ $('score').textContent=String(score).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);$('gems').textContent=String(gems).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);$('lives').textContent=String(lives).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);$('progress').style.width=Math.max(0,Math.min(100,progress))+'%';}
+function setup(){score=0;gems=0;lives=3;time=0;progress=0;ended=false;paused=false;objects=[];particles=[];keys={left:false,right:false,up:false,down:false,action:false};player={x:W*.5,y:H*.72,vx:0,vy:0,r:18,grounded:false,angle:0};world={speed:210,spawn:0,goal:Math.max(18,12+variant*2),distance:0,phase:0,hit:0,combo:0};puzzle={hitboxes:{},picked:[],path:[],seq:[],revealed:[],board:[],input:[],pos:8,target:0};$('result').classList.add('hidden');$('intro').classList.remove('hidden');$('introTitle').textContent=name;$('missionTitle').textContent=`بازی ${mode} از ۵۰: ${name}`;$('missionText').textContent=missionText();$('emoji').textContent=['🏎️','🏃','🚀','🧩','🏆'][family];$('introText').textContent=instruction();$('action').textContent=family===0?'بوست':family===1?'پرش':family===2?'نشان':'انتخاب';hud();draw();}
+function instruction(){if(family===0)return 'با چپ و راست مسیر را عوض کن؛ از مانع‌ها دوری کن و نشان‌ها را جمع کن. هدف این مرحله: '+world.goal+' امتیاز.';if(family===1)return 'با چپ و راست حرکت کن و با دکمهٔ پرش از مانع‌ها بگذر؛ به سکوی پایان برس.';if(family===2)return 'سفینه را با چهار جهت حرکت بده، نشان‌های نورانی را بگیر و از سنگ‌ها دوری کن.';if(family===3)return ['خانه‌های رنگی را به ترتیب به خاطر بسپار.','رنگ مشابه را پیدا و انتخاب کن.','از هزارتو راه خروج را پیدا کن.','شیء هدف را بین شکل‌ها پیدا کن.','رمز رنگی را با سرنخ‌ها حدس بزن.','خانه‌های روشن را به خاطر بسپار.','با ظاهرشدن علامت سبز سریع لمس کن.','با پرش از موانع عبور کن.','مسیر امن را با انتخاب خانه‌ها بساز.','رمز در را با آزمون منطقی باز کن.'][variant];return ['توپ را به سمت دروازه بفرست.','توپ را داخل حلقه بینداز.','با زاویهٔ مناسب همهٔ هدف‌ها را بینداز.','توپ را از برخورد با لبه‌ها حفظ کن.','توپ را به سمت حفره هدایت کن.','هدف‌های نورانی را لمس کن.','توپ را با زمان‌بندی درست پرتاب کن.','از دروازه‌های مسیر عبور کن.','تعادل نشانگر را در محدوده نگه دار.','چند چالش کوتاه را پشت سر هم انجام بده.'][variant];}
+function missionText(){return family===0?'از مانع‌ها دوری کن و نشان جمع کن؛ هدف '+world.goal+' امتیاز است.':family===1?'به سکوی پایان برس و نشان‌های مسیر را جمع کن.':family===2?'نشان‌های نورانی را جمع کن و از برخورد دوری کن.':family===3?instruction():instruction();}
+function start(){setup();started=true;$('intro').classList.add('hidden');$('result').classList.add('hidden');if(family===3)initPuzzle();last=performance.now();if(raf)cancelAnimationFrame(raf);raf=requestAnimationFrame(loop);if(family===3)initPuzzle();toast('شروع شد!');}
+function finish(win,msg){if(ended)return;ended=true;started=false;$('result').classList.remove('hidden');$('resultTitle').textContent=win?'مرحله کامل شد!':'پایان بازی';$('resultEmoji').textContent=win?'🏆':'✨';$('resultText').textContent=msg+` امتیاز نهایی: ${score}`;}
+function addScore(n){score+=n;progress=Math.min(100,score/Math.max(1,world.goal)*100);hud();}
+function circle(x,y,r,color,stroke){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}}
+function bg(){let g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,'#0c2940');g.addColorStop(.55,'#07131f');g.addColorStop(1,'#140e2b');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);ctx.globalAlpha=.22;for(let i=0;i<50;i++){let x=(i*113+time*9)%W,y=(i*79+time*22)%H;circle(x,y,1.2,'#9cf9ff')}ctx.globalAlpha=1;}
+function drawCar(){bg();let roadW=Math.min(W*.7,440),rx=(W-roadW)/2;if(variant===7){ctx.fillStyle='#07536a';ctx.fillRect(0,0,W,H);for(let y=(time*80)%42;y<H;y+=42){ctx.strokeStyle='#49c8df55';ctx.beginPath();ctx.moveTo(0,y);ctx.quadraticCurveTo(W*.5,y+18,W,y);ctx.stroke()}}else if(variant===4){ctx.fillStyle='#0a1738';ctx.fillRect(0,0,W,H);for(let i=0;i<36;i++)circle((i*97)%W,(i*61+time*25)%H,1.5,'#d6f7ff')}ctx.fillStyle=variant===7?'#16829a':'#273746';ctx.fillRect(rx,0,roadW,H);ctx.fillStyle=variant===7?'#0b617a':'#172431';ctx.fillRect(rx+10,0,roadW-20,H);ctx.strokeStyle=variant===5?'#e9f4ff':'#a5b9c2';ctx.setLineDash(variant===5?[]:[22,18]);ctx.lineWidth=variant===5?5:3;ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle='#ffd166';ctx.lineWidth=4;ctx.strokeRect(rx+4,0,roadW-8,H);for(const o of objects){if(o.type==='gem'){circle(o.x,o.y,o.r,'#52f5e4','#eaffff');txt('✦',o.x,o.y,14,'#06202a')}else{rounded(o.x-18,o.y-22,36,44,8,o.color||'#ff7192','#ffe7ef');rounded(o.x-10,o.y-15,20,10,3,'#b5f2ff');}}let laneW=roadW/3;player.x=Math.max(rx+laneW*.5,Math.min(rx+roadW-laneW*.5,player.x));if(variant===1){circle(player.x-11,player.y+17,8,'#07111b','#a9bbc5');circle(player.x+11,player.y+17,8,'#07111b','#a9bbc5');rounded(player.x-10,player.y-25,20,39,7,'#3ce4d1','#dffffb')}else if(variant===4){ctx.fillStyle='#3ce4d1';ctx.strokeStyle='#dffffb';ctx.beginPath();ctx.moveTo(player.x,player.y-28);ctx.lineTo(player.x+18,player.y+22);ctx.lineTo(player.x,player.y+12);ctx.lineTo(player.x-18,player.y+22);ctx.closePath();ctx.fill();ctx.stroke()}else if(variant===7){ctx.fillStyle='#e8c48a';ctx.beginPath();ctx.moveTo(player.x,player.y-25);ctx.lineTo(player.x+23,player.y+18);ctx.lineTo(player.x-23,player.y+18);ctx.closePath();ctx.fill();}else{rounded(player.x-18,player.y-26,36,52,9,'#3ce4d1','#dffffb');rounded(player.x-11,player.y-17,22,12,4,'#b5f2ff');circle(player.x-12,player.y+18,5,'#07111b');circle(player.x+12,player.y+18,5,'#07111b')}txt(variant===7?'رودخانهٔ نئونی':variant===4?'مسیر فضایی':variant===5?'ریل قطار رنگی':'مسیر امتیاز',W/2,H-164,12,'#8eaab9');}
+function drawPlatform(){bg();ctx.fillStyle='#1b3442';ctx.fillRect(0,H*.82,W,H*.18);ctx.fillStyle='#315469';ctx.fillRect(0,H*.82,W,4);for(const o of objects){if(o.type==='gem')circle(o.x,o.y,9,'#65f5e5','#efffff');else if(o.type==='pit')ctx.clearRect(o.x,o.y,o.w,o.h);else rounded(o.x,o.y,o.w,o.h,5,o.color||'#e6a84f','#ffe8b2');}rounded(player.x-13,player.y-28,26,38,7,'#59f5df','#efffff');circle(player.x,player.y-35,10,'#ffd6b1');txt('پایان',W-40,H*.75,11,'#ffd166');}
+function drawSpace(){bg();for(const o of objects){if(o.type==='gem'){circle(o.x,o.y,o.r,'#76ffcf','#efffff');txt('✦',o.x,o.y,13,'#07342c')}else{ctx.save();ctx.translate(o.x,o.y);ctx.rotate(o.a||0);ctx.fillStyle='#9ca7b5';ctx.strokeStyle='#e4f4ff';ctx.beginPath();for(let i=0;i<7;i++){let a=i*Math.PI*2/7,r=o.r*(.8+(i%3)*.1);ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r)}ctx.closePath();ctx.fill();ctx.stroke();ctx.restore()}}ctx.save();ctx.translate(player.x,player.y);ctx.rotate(player.angle||0);ctx.fillStyle='#66f6e7';ctx.strokeStyle='#eaffff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,-22);ctx.lineTo(16,16);ctx.lineTo(0,9);ctx.lineTo(-16,16);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();}
+function drawSports(){bg();let y=H*.32;rounded(W*.12,y,W*.76,H*.42,16,'#174b48','#78e6c2');ctx.strokeStyle='#d8fff2';ctx.lineWidth=3;ctx.strokeRect(W*.18,y+10,W*.64,H*.36);for(let i=0;i<5;i++)ctx.strokeRect(W*.22+i*W*.11,y+25,W*.07,H*.22);if(variant===0){rounded(W*.38,y+20,W*.24,10,4,'#f6fcff');circle(player.x,player.y,13,'#ffffff','#66d8ff')}else if(variant===1||variant===6){ctx.strokeStyle='#ffd166';ctx.lineWidth=7;ctx.beginPath();ctx.arc(W*.5,y+25,36,0,Math.PI*2);ctx.stroke();circle(player.x,player.y,13,'#ffffff','#66d8ff')}else if(variant===2){for(let i=0;i<10;i++)rounded(W*.3+(i%5)*W*.08,y+40+Math.floor(i/5)*40,18,24,4,'#ffd166','#fff3bf');circle(player.x,player.y,12,'#ffffff','#66d8ff')}else if(variant===3){let b=world.ball||{x:W*.5,y:H*.55};circle(b.x,b.y,10,'#fff','#75e8ff');rounded(player.x-34,H*.78,68,14,7,'#66f6e7','#efffff')}else{for(let i=0;i<7;i++)circle(W*.25+i*W*.08,y+H*.17,9,colors[i%colors.length]);circle(player.x,player.y,13,'#ffffff','#66d8ff')}for(const o of objects){if(o.dead)continue;circle(o.x,o.y,o.r||15,'#ffd166','#fff6d8');txt(variant===2?'●':variant===1?'🏀':'✦',o.x,o.y,Math.max(12,(o.r||15)*1.1),'#fff')}txt('برای حرکت، جهت‌ها را بزن؛ برای هدف‌گیری روی هدف لمس کن.',W/2,H*.88,12,'#d6edf4');}
+function drawPuzzle(){bg();if(variant===0||variant===5){let n=variant===0?4:5,cell=Math.min(W*.14,H*.12,64),gap=8,startX=(W-n*(cell+gap)+gap)/2,startY=H*.32;for(let i=0;i<n*n;i++){let x=startX+(i%n)*(cell+gap),y=startY+Math.floor(i/n)*(cell+gap);let on=(puzzle.show&&puzzle.seq.includes(i))||puzzle.picked.includes(i);rounded(x,y,cell,cell,10,on?colors[i%colors.length]:'#19334a',on?'#efffff':'#426477');puzzle.hitboxes[i]={x,y,w:cell,h:cell};}txt(variant===0?'ترتیب نورها را تکرار کن':'خانه‌های روشن را دوباره انتخاب کن',W/2,H*.24,14,'#f4ffff');}else if(variant===1){let n=4,cell=Math.min(W*.16,H*.13,68),gap=8,startX=(W-n*(cell+gap)+gap)/2,startY=H*.3;for(let i=0;i<16;i++){let x=startX+(i%4)*(cell+gap),y=startY+Math.floor(i/4)*(cell+gap);let c=puzzle.revealed[i]?colors[puzzle.board[i]]:'#1b354a';rounded(x,y,cell,cell,10,c,'#75a7b8');puzzle.hitboxes[i]={x,y,w:cell,h:cell};}txt('هم‌رنگ‌ها را جفت کن',W/2,H*.22,14,'#f4ffff');}else if(variant===2){let cell=Math.min(42,W*.1),startX=(W-7*cell)/2,startY=H*.25;for(let r=0;r<7;r++)for(let c=0;c<7;c++){let i=r*7+c,x=startX+c*cell,y=startY+r*cell;let wall=(r===0||c===0||r===6||c===6||((r*3+c*5+mode)%11===0&&i!==puzzle.pos&&i!==48));if(!wall||i===puzzle.pos||i===48){rounded(x+2,y+2,cell-4,cell-4,4,i===puzzle.pos?'#55f5df':i===48?'#ffd166':'#1a3345','#3e667a');puzzle.hitboxes[i]={x,y,w:cell,h:cell};}}txt('به خانهٔ طلایی برس',W/2,H*.18,14,'#f4ffff');}else if(variant===3){let n=12,cell=Math.min(W*.075,35),startX=(W-n*cell)/2,startY=H*.32;for(let i=0;i<n;i++){let x=startX+i*cell,y=startY+(i%3)*cell*1.4;puzzle.hitboxes[i]={x,y,w:cell,h:cell};circle(x+cell/2,y+cell/2,cell*.38,colors[(i*7+mode)%colors.length]);if(i===puzzle.target)txt('★',x+cell/2,y+cell/2,15,'#fff')}txt('ستاره را پیدا کن',W/2,H*.23,14,'#f4ffff');}else if(variant===4||variant===9){for(let i=0;i<6;i++){let x=W*.2+(i%3)*W*.3,y=H*.36+Math.floor(i/3)*H*.15;rounded(x,y,W*.18,48,10,colors[i], '#efffff');txt(String(i+1),x+W*.09,y+24,17,'#06111c');puzzle.hitboxes[i]={x,y,w:W*.18,h:48};}txt(variant===4?'کد ۳ رقمی را پیدا کن':'سه کلید درست را انتخاب کن',W/2,H*.25,14,'#f4ffff');txt('انتخاب‌ها: '+(puzzle.input||[]).join(' - '),W/2,H*.72,13,'#ffd166');}else if(variant===6){let color=puzzle.green?'#57f59b':'#ffb85b';rounded(W*.25,H*.35,W*.5,100,18,color,'#efffff');txt(puzzle.green?'حالا لمس کن!':'صبر کن تا سبز شود',W/2,H*.42,17,'#06111c');}else if(variant===7){drawPlatform();}else if(variant===8){let n=7,cell=Math.min(W*.1,46),startX=(W-n*cell)/2,startY=H*.34;for(let i=0;i<n*n;i++){let x=startX+(i%n)*cell,y=startY+Math.floor(i/n)*cell;rounded(x+2,y+2,cell-4,cell-4,4,puzzle.path.includes(i)?'#5af3dd':'#1a3345','#4b7082');puzzle.hitboxes[i]={x,y,w:cell,h:cell};}txt('از سمت چپ به راست مسیر بساز',W/2,H*.25,14,'#f4ffff');}}
+function draw(){if(!ctx||!W||!H)return;if(family===0)drawCar();else if(family===1)drawPlatform();else if(family===2)drawSpace();else if(family===3)drawPuzzle();else drawSports();if(paused&&started){rounded(W*.3,H*.42,W*.4,70,14,'#06101beF','#49dfe4');txt('بازی متوقف است',W/2,H*.5,18,'#fff')}}
+function initPuzzle(){puzzle={hitboxes:{},picked:[],show:true,seq:[],board:[],revealed:[],pairs:0,pos:8,target:Math.floor(Math.random()*12),input:[],path:[21],green:false};if(variant===0||variant===5){let n=variant===0?4:5;puzzle.seq=Array.from({length:variant===0?5:7},()=>Math.floor(Math.random()*n*n));setTimeout(()=>{puzzle.show=false;draw()},variant===0?1800:2200)}else if(variant===1){puzzle.board=Array.from({length:16},(_,i)=>i%8);puzzle.board.sort(()=>Math.random()-.5);puzzle.revealed=Array(16).fill(false);puzzle.first=-1;puzzle.matches=0}else if(variant===4||variant===9){puzzle.code=[1+Math.floor(Math.random()*6),1+Math.floor(Math.random()*6),1+Math.floor(Math.random()*6)];puzzle.input=[]}else if(variant===6){puzzle.green=false;setTimeout(()=>{if(started&&!ended){puzzle.green=true;puzzle.greenAt=performance.now();draw()}},1500+Math.random()*2500)}draw();}
+function clickPuzzle(x,y){let hit=Object.entries(puzzle.hitboxes||{}).find(([i,b])=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h);if(!hit){if(variant===6&&puzzle.green){let ms=performance.now()-puzzle.greenAt;addScore(Math.max(10,500-Math.floor(ms)));finish(true,`زمان واکنش تو ${Math.floor(ms)} میلی‌ثانیه بود.`)}return}let i=Number(hit[0]);if(variant===0||variant===5){let n=variant===0?4:5,expected=puzzle.seq[puzzle.picked.length];if(i===expected){puzzle.picked.push(i);addScore(50);if(puzzle.picked.length===puzzle.seq.length)finish(true,'حافظه‌ات عالی بود!')}else{lives--;hud();puzzle.picked=[];toast('ترتیب اشتباه بود؛ دوباره امتحان کن.');if(lives<=0)finish(false,'فرصت‌ها تمام شد.');}draw()}else if(variant===1){if(puzzle.revealed[i])return;puzzle.revealed[i]=true;if(puzzle.first<0)puzzle.first=i;else{let a=puzzle.first;puzzle.first=-1;if(puzzle.board[a]===puzzle.board[i]){puzzle.matches++;addScore(100);if(puzzle.matches===8)finish(true,'همهٔ جفت‌ها را پیدا کردی!')}else{setTimeout(()=>{puzzle.revealed[a]=puzzle.revealed[i]=false;draw()},650)}}draw()}else if(variant===2){if(i===48){finish(true,'راه خروج را پیدا کردی!');return}puzzle.pos=i;addScore(5);draw()}else if(variant===3){if(i===puzzle.target){addScore(200);puzzle.target=Math.floor(Math.random()*12);gems++;hud();if(gems>=5)finish(true,'همهٔ ستاره‌ها را پیدا کردی!');draw()}else{lives--;hud();toast('این ستاره نیست!');if(lives<=0)finish(false,'فرصت‌ها تمام شد.')}}else if(variant===4||variant===9){puzzle.input.push(i+1);if(puzzle.input.length===3){let good=puzzle.input.every((v,j)=>v===puzzle.code[j]);if(good){addScore(500);finish(true,'رمز درست بود!')}else{let hits=puzzle.input.filter((v,j)=>puzzle.code.includes(v)).length;toast('سرنخ: '+hits+' عدد از رمز را انتخاب کرده‌ای.');puzzle.input=[];lives--;hud();if(lives<=0)finish(false,'رمز را پیدا نکردی.')} }draw()}else if(variant===8){if(Math.abs((i%7)-(puzzle.path[puzzle.path.length-1]%7))<=1&&Math.abs(Math.floor(i/7)-Math.floor(puzzle.path[puzzle.path.length-1]/7))<=1){puzzle.path.push(i);addScore(15);if(i%7===6)finish(true,'مسیر کامل شد!');draw()}else toast('خانهٔ بعدی باید کنار مسیر باشد.')}}
+function spawn(){if(family===0){let lane=Math.floor(Math.random()*3),roadW=Math.min(W*.7,440),rx=(W-roadW)/2,lw=roadW/3;objects.push({type:Math.random()<.28?'gem':'block',x:rx+lw*(lane+.5),y:-30,r:11,color:colors[Math.floor(Math.random()*colors.length)],v:world.speed*(.8+Math.random()*.7)});}else if(family===1){let type=Math.random()<.32?'gem':'block';objects.push({type,x:W+30,y:H*.82-(type==='gem'?45:Math.random()*35),w:24+Math.random()*22,h:25+Math.random()*35,v:world.speed*(.7+Math.random()*.6),color:colors[Math.floor(Math.random()*colors.length)]});}else if(family===2){objects.push({type:Math.random()<.38?'gem':'rock',x:Math.random()*W,y:-20,r:10+Math.random()*12,v:world.speed*(.55+Math.random()*.8),a:Math.random()});}else if(family===3&&variant===7){let type=Math.random()<.3?'gem':'block';objects.push({type,x:W+30,y:H*.82-(type==='gem'?45:Math.random()*35),w:24+Math.random()*22,h:25+Math.random()*35,v:world.speed,color:colors[Math.floor(Math.random()*colors.length)]});}else if(family===4){objects.push({type:'target',x:W*.2+Math.random()*W*.6,y:H*.25+Math.random()*H*.35,r:14+Math.random()*10,life:2.4});}}
+function update(dt){time+=dt;if(family===0){world.spawn-=dt;if(world.spawn<=0){spawn();world.spawn=Math.max(.25, .8-variant*.045)}world.speed=210+variant*14+time*3;let roadW=Math.min(W*.7,440),rx=(W-roadW)/2,lw=roadW/3;if(keys.left)player.x-=lw*dt*4;if(keys.right)player.x+=lw*dt*4;if(keys.action)player.y=Math.max(H*.5,player.y-180*dt);else player.y=Math.min(H*.72,player.y+95*dt);if(variant===3&&(keys.left||keys.right))addScore(1);for(const o of objects){o.y+=o.v*dt;if(o.type==='gem'&&Math.hypot(player.x-o.x,player.y-o.y)<30){o.dead=true;gems++;addScore(100);hud()}else if(o.type!=='gem'&&Math.abs(player.x-o.x)<28&&Math.abs(player.y-o.y)<36&&!o.hit){o.hit=true;lives--;hud();toast('مانع! مراقب باش.');if(lives<=0)finish(false,'برخوردها فرصت‌هایت را تمام کردند.')}}objects=objects.filter(o=>!o.dead&&o.y<H+50);world.distance+=dt*world.speed/10;if([2,8].includes(variant)&&time>=25){finish(true,'رکورد زمان این مسیر ثبت شد!')}else if([1,4,7].includes(variant)&&gems>=6+variant%3){finish(true,'همهٔ نشان‌های مسیر جمع شدند!')}else if(variant===3&&score>=world.goal*100){finish(true,'امتیاز پیچ‌های نئونی کامل شد!')}else if(![2,8].includes(variant)&&![1,4,7].includes(variant)&&variant!==3&&world.distance>world.goal*10){finish(true,'به خط پایان رسیدی!')}progress=[2,8].includes(variant)?Math.min(100,time/25*100):[1,4,7].includes(variant)?Math.min(100,gems/(6+variant%3)*100):variant===3?Math.min(100,score/(world.goal*100)*100):Math.min(100,world.distance/(world.goal*10)*100);}
+else if(family===1){world.spawn-=dt;if(world.spawn<=0){spawn();world.spawn=.75+Math.random()*.45}if(keys.left)player.x-=250*dt;if(keys.right)player.x+=250*dt;if(keys.action&&player.grounded){player.vy=-480;player.grounded=false}player.vy+=1050*dt;player.y+=player.vy*dt;if(player.y>H*.82-25){player.y=H*.82-25;player.vy=0;player.grounded=true}player.x=Math.max(25,Math.min(W-25,player.x));for(const o of objects){o.x-=o.v*dt;if(o.type==='gem'&&Math.hypot(player.x-o.x,player.y-o.y)<28){o.dead=true;gems++;addScore(80)}else if(o.type!=='gem'&&!o.hit&&Math.abs(player.x-o.x)<25&&Math.abs(player.y-o.y)<30){o.hit=true;lives--;hud();player.vy=-260;if(lives<=0)finish(false,'مسیر سخت بود؛ دوباره تلاش کن.')}}objects=objects.filter(o=>!o.dead&&o.x>-60);world.distance+=dt*world.speed/8;progress=Math.min(100,world.distance/(world.goal*9)*100);if(progress>=100)finish(true,'به سکوی پایان رسیدی!');}
+else if(family===2){world.spawn-=dt;if(world.spawn<=0){spawn();world.spawn=.45+Math.random()*.45}let speed=240;if(keys.left)player.x-=speed*dt;if(keys.right)player.x+=speed*dt;if(keys.up)player.y-=speed*dt;if(keys.down)player.y+=speed*dt;player.x=Math.max(18,Math.min(W-18,player.x));player.y=Math.max(80,Math.min(H-80,player.y));for(const o of objects){o.y+=o.v*dt;o.a+=dt;if(o.type==='gem'&&Math.hypot(player.x-o.x,player.y-o.y)<28){o.dead=true;gems++;addScore(100)}else if(o.type==='rock'&&!o.hit&&Math.hypot(player.x-o.x,player.y-o.y)<player.r+o.r){o.hit=true;lives--;hud();if(lives<=0)finish(false,'سفینه فرصت‌هایش را از دست داد.')}}objects=objects.filter(o=>!o.dead&&o.y<H+40);if([1,7,8].includes(variant)){progress=Math.min(100,time/(25+variant)*100);if(time>=25+variant)finish(true,'زمان مأموریت با موفقیت کامل شد!')}else{progress=Math.min(100,gems/(5+variant)*100);if(gems>=5+variant)finish(true,'همهٔ نشان‌های مأموریت جمع شدند!')}}
+else if(family===4){world.spawn-=dt;if(world.spawn<=0){spawn();world.spawn=.7}for(const o of objects){o.life-=dt;if(o.dead)continue;if(o.life<=0){o.dead=true;if(variant!==3){lives--;hud()}}}objects=objects.filter(o=>!o.dead);if(variant===3){player.x=pointer.x||W/2;player.y=H*.78;world.phase+=dt;let ball=world.ball||(world.ball={x:W*.5,y:H*.65,vx:150,vy:170});ball.x+=ball.vx*dt;ball.y+=ball.vy*dt;if(ball.x<10||ball.x>W-10)ball.vx*=-1;if(ball.y<80)ball.vy=Math.abs(ball.vy);if(Math.abs(ball.x-player.x)<48&&Math.abs(ball.y-player.y)<25){ball.vy=-Math.abs(ball.vy);addScore(10);gems++}if(ball.y>H+20){lives--;ball.y=H*.4;ball.vy=-160;hud()}}else{if(keys.left)player.x-=220*dt;if(keys.right)player.x+=220*dt;player.x=Math.max(25,Math.min(W-25,player.x));if(keys.action){let target=objects.find(o=>!o.dead&&Math.hypot(player.x-o.x,player.y-o.y)<95);if(target){target.dead=true;gems++;addScore(100);hud()}}}if(gems>=5+variant)finish(true,'امتیاز هدف به دست آمد!');if(lives<=0)finish(false,'این دور تمام شد.');progress=Math.min(100,gems/(5+variant)*100);}
+if(family===3){if(variant===7){world.spawn-=dt;if(world.spawn<=0){spawn();world.spawn=.9}if(keys.left)player.x-=240*dt;if(keys.right)player.x+=240*dt;if(keys.action&&player.grounded){player.vy=-450;player.grounded=false}player.vy+=1000*dt;player.y+=player.vy*dt;if(player.y>H*.82-25){player.y=H*.82-25;player.vy=0;player.grounded=true}for(const o of objects){o.x-=o.v*dt;if(!o.dead&&Math.abs(player.x-o.x)<25&&Math.abs(player.y-o.y)<28){o.dead=true;addScore(100)}}objects=objects.filter(o=>!o.dead&&o.x>-50);if(time>20)finish(true,'رکورد پرش ثبت شد!');} }
+hud();}
+function loop(now){if(!started||ended)return;raf=requestAnimationFrame(loop);if(paused){last=now;draw();return}let dt=Math.min(.035,Math.max(0,(now-last)/1000));last=now;if(family!==3||variant===7)update(dt);else time+=dt;draw();if(family===3&&variant===6&&puzzle.green&&time>20)finish(false,'زمان واکنش تمام شد.');}
+function action(){if(!started||paused)return;if(family===1||family===3&&variant===7){keys.action=true;setTimeout(()=>keys.action=false,90)}else if(family===4){if(variant===3){return}let target=objects.find(o=>!o.dead&&Math.hypot(player.x-o.x,player.y-o.y)<125);if(target){target.dead=true;gems++;addScore(100);hud();if(gems>=5+variant)finish(true,'هدف‌های مرحله کامل شد!')}else{addScore(5);toast('کمی دقیق‌تر هدف بگیر.')}}else if(family===3&&variant!==6){clickPuzzle(pointer.x||W/2,pointer.y||H/2)}else if(family===0){player.y=Math.max(H*.45,player.y-45);addScore(2)}else if(family===2){addScore(2);}}
+function pointerDown(e){pointer.x=e.clientX;pointer.y=e.clientY;pointer.down=true;if(!started||paused)return;if(family===3){clickPuzzle(pointer.x,pointer.y);return}if(family===4){if(variant===3)return;let o=objects.find(o=>!o.dead&&Math.hypot(pointer.x-o.x,pointer.y-o.y)<Math.max(34,o.r+18));if(o){o.dead=true;gems++;addScore(100);hud();if(gems>=5+variant)finish(true,'هدف‌های مرحله کامل شد!')}else if(variant===0||variant===1||variant===6){addScore(20);player.x=pointer.x;toast('پرتاب شد!')}return}if(family===0){keys[pointer.x<W/2?'left':'right']=true;setTimeout(()=>{keys.left=keys.right=false},160)}else if(family===1){if(pointer.y<H*.65)action();else keys[pointer.x<W/2?'left':'right']=true;}else if(family===2){player.x=pointer.x;player.y=pointer.y;}}
+canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',e=>{pointer.x=e.clientX;pointer.y=e.clientY;if(pointer.down&&started&&family===2){player.x=pointer.x;player.y=pointer.y}if(pointer.down&&started&&family===4&&variant===3)player.x=pointer.x});window.addEventListener('pointerup',()=>{pointer.down=false;keys.left=keys.right=keys.up=keys.down=false});
+window.addEventListener('keydown',e=>{let k=e.key.toLowerCase();if(k==='arrowleft'||k==='a')keys.left=true;if(k==='arrowright'||k==='d')keys.right=true;if(k==='arrowup'||k==='w')keys.up=true;if(k==='arrowdown'||k==='s')keys.down=true;if(k===' '||k==='enter'){e.preventDefault();action()}if(k==='escape')togglePause()});window.addEventListener('keyup',e=>{let k=e.key.toLowerCase();if(k==='arrowleft'||k==='a')keys.left=false;if(k==='arrowright'||k==='d')keys.right=false;if(k==='arrowup'||k==='w')keys.up=false;if(k==='arrowdown'||k==='s')keys.down=false});document.querySelectorAll('[data-key]').forEach(b=>{const k=b.dataset.key;const on=e=>{e.preventDefault();keys[k]=true},off=e=>{e.preventDefault();keys[k]=false};b.addEventListener('pointerdown',on);b.addEventListener('pointerup',off);b.addEventListener('pointercancel',off);b.addEventListener('pointerleave',off)});
+function togglePause(){if(!started)return;paused=!paused;$('pause').textContent=paused?'ادامه':'توقف';toast(paused?'بازی متوقف شد':'بازی ادامه دارد');}
+$('start').addEventListener('click',start);$('again').addEventListener('click',start);$('menu').addEventListener('click',()=>{started=false;ended=false;$('result').classList.add('hidden');$('intro').classList.remove('hidden');setup()});$('help').addEventListener('click',()=>toast(instruction()));$('action').addEventListener('pointerdown',e=>{e.preventDefault();action()});$('pause').addEventListener('click',togglePause);window.addEventListener('resize',resize);
+resize();setup();
+})();
+</script></body></html>
+"""
+class _GameRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _send(self, status, body, content_type="text/plain; charset=utf-8", cache="no-store"):
+        payload = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            # Browsers and health checks may disconnect before the response finishes.
+            pass
+
+    def do_GET(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path in ("/", "/healthz", "/health", "/ready"):
+            self._send(200, "مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈 is running")
+            return
+        if path == "/game":
+            self._send(200, GAME_HTML, "text/html; charset=utf-8")
+            return
+        if path == "/favicon.ico":
+            self._send(204, b"", "image/x-icon")
+            return
+        self._send(404, "این صفحه پیدا نشد. صفحهٔ بازی: /game")
+
+    def do_HEAD(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path in ("/", "/healthz", "/health", "/ready", "/game"):
+            body = GAME_HTML.encode("utf-8") if path == "/game" else b"ok"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Type", "text/html; charset=utf-8" if path == "/game" else "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+        else:
+            self.send_error(404)
+
+    def log_message(self, fmt, *args):
+        # Keep routine health checks quiet; report actual server errors for debugging.
+        if args and str(args[1:2]).startswith(("4", "5")):
+            print("Game web request:", fmt % args)
+
+BOT_SHORT_DESCRIPTION = (
+    "امنیت گروه، مدیریت اعضا، دستیار هوشمند، ابزارهای کاربردی و بازی‌های تلگرامی"
+)
+BOT_LONG_DESCRIPTION = (
+    "🛡️ مدیریت گروه | 𝑴𝒂𝒔𝒊𝒉 𝑯𝒂𝒄𝒌𝒆𝒓𝒊𝒏𝒈 — دستیار مدیریت و امنیت تلگرام. "
+    "امکانات: ضدلینک و ضداسپم، کنترل رسانه و فوروارد، خوشامدگویی و کپچا، "
+    "اخطار و مدیریت اعضا، قوانین و پاسخ خودکار، آمار گروه، دستیار هوشمند، "
+    "تبدیل متن به فونت‌های تزئینی، تیکت پشتیبانی، بازی‌ها، کیف پول تومانی و اشتراک. "
+    "برخی قابلیت‌ها به مجوز نصب، دسترسی ادمین و تنظیم سرویس‌های بیرونی نیاز دارند. "
+    "برای دیدن راهنما و منو، ربات را Start کنید."
+)
+
+def sync_bot_profile_descriptions():
+    """Publish the public About/Description shown before a user starts the bot."""
+    short_description = (os.getenv("BOT_SHORT_DESCRIPTION") or BOT_SHORT_DESCRIPTION).strip()[:120]
+    description = (os.getenv("BOT_DESCRIPTION") or BOT_LONG_DESCRIPTION).strip()[:512]
+    try:
+        bot.set_my_short_description(short_description)
+        bot.set_my_description(description)
+        print("Bot profile descriptions synchronized.")
+    except Exception as profile_error:
+        # Profile settings must never prevent the bot from starting.
+        print("Bot profile description update skipped:", repr(profile_error))
+
+
+def start_game_web_server():
+    port = int(os.getenv("PORT", "8080"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), _GameRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, name="game-web-server", daemon=True)
+    thread.start()
+    print(f"MASIH GUARD web server listening on port {port}")
+    return server
+
+
+if __name__ == "__main__":
+    print(f"{BRAND} {VERSION}: starting web server and polling")
+    print("Configuration: BOT_TOKEN=set; AI=" + ("enabled" if AI_API_KEY else "not configured") + "; web game uses WEB_GAME_URL or RENDER_EXTERNAL_URL")
+    sync_bot_profile_descriptions()
+    try:
+        start_game_web_server()
+    except Exception as web_error:
+        print("WEB GAME SERVER STARTUP FAILED:", repr(web_error))
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=25, allowed_updates=["message", "callback_query", "chat_member", "chat_join_request"])
+    except Exception as e:
+        print("Polling stopped:",repr(e))
+        raise
